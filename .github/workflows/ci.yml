@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: revenue_ai
+          POSTGRES_PASSWORD: revenue_ai
+          POSTGRES_DB: revenue_ai
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U revenue_ai -d revenue_ai"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      RE_AI_DATABASE_URL: postgresql+asyncpg://revenue_ai:revenue_ai@localhost:5433/revenue_ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy src
+      - run: alembic upgrade head
+      - run: alembic check
+      - run: pytest --cov=src --cov-report=term-missing

@@ -1,0 +1,18 @@
+# Local development services. Not for production.
+# Port 5433 so it runs next to the backend's Postgres on 5432.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: revenue_ai
+      POSTGRES_PASSWORD: revenue_ai
+      POSTGRES_DB: revenue_ai
+    ports: ["5433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revenue_ai -d revenue_ai"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
