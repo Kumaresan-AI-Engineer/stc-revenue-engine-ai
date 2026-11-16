@@ -56,7 +56,7 @@ class StubResponses:
 def _llm(replies: list[Any], **settings: Any) -> tuple[OpenAILLM, StubResponses]:
     stub = StubResponses(replies)
     client = SimpleNamespace(responses=stub)
-    return OpenAILLM(client, Settings(**settings)), stub  # type: ignore[arg-type]
+    return OpenAILLM(client, Settings(_env_file=None, **settings)), stub  # type: ignore[arg-type]
 
 
 CALL = AgentCall("drafting", "Be precise.", "Question?", Answer, "medium")

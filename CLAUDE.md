@@ -11,7 +11,7 @@ engineering standards apply here too. `README.md` describes the agents, endpoint
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
-docker compose up -d                                  # Postgres 16 + pgvector on 5433
+docker compose up -d                                  # Postgres 16 on 5433 (Qdrant is embedded)
 .venv/Scripts/python -m alembic upgrade head
 .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m ruff format --check .
 .venv/Scripts/python -m mypy src
@@ -26,9 +26,10 @@ fakes (`tests/fakes.py`: scripted `FakeLLM`, word-hash `FakeEmbedder`, in-memory
 ## How it fits together
 
 - **Layers:** `api/router.py` (HTTP only) → `services/` (one use-case per step: analyse, library, drafting,
-  clarification) → `agents/` (prompt + output schema + pure `check`) and `store/` (pgvector). `rules/` and
+  clarification) → `agents/` (prompt + output schema + pure `check`) and `store/` (Qdrant + Postgres). `rules/` and
   `documents/` are pure. Agents depend on `llm/ports.py` (`LLM`, `Embedder`), never on OpenAI directly;
-  `llm/openai_provider.py` is the only file that imports `openai`.
+  `llm/openai_provider.py` (Responses API) and `llm/chat_completions_provider.py` (gateways such as Yantra,
+  `RE_AI_LLM_API=chat_completions`) are the only files that import `openai`.
 - **Every agent result goes:** agent → code `check` → `agents/review.py` → one retry with the problems as notes →
   drop / `needs_person`. Keep that shape when adding an agent.
 - **Determinism is a feature:** changing a prompt means bumping its `PROMPT_VERSION` (part of every cache key);

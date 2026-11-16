@@ -1,4 +1,4 @@
-"""The pgvector store against a real database (after `alembic upgrade head`).
+"""The Postgres store (passages in an in-memory Qdrant) against a real database (`alembic upgrade head`).
 
 Skipped when Postgres is unreachable, so a green run without it has not exercised this file.
 Each test works in a fresh workspace id and removes its rows; other data is never touched.
@@ -9,14 +9,16 @@ from collections.abc import AsyncIterator
 
 import pytest
 from fakes import _vector
+from qdrant_client import AsyncQdrantClient
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from core.config import get_settings
 from documents.chunking import Passage
-from store.models import LibraryEntryIndex, LibraryPassage, ResultCacheRow
+from store.models import LibraryEntryIndex, ResultCacheRow
 from store.ports import EntryMeta
 from store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
+from store.vector_db import QdrantPassages
 
 
 @pytest.fixture
@@ -24,7 +26,7 @@ async def session() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine(get_settings().database_url)
     try:
         async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1 FROM library_passage LIMIT 1"))
+            await conn.execute(text("SELECT 1 FROM library_entry_index LIMIT 1"))
     except Exception:
         await engine.dispose()
         pytest.skip("Postgres with the AI service schema is not reachable")
@@ -39,14 +41,14 @@ def _passage(pid: str, text_: str, section: str = "proposal") -> Passage:
 
 
 async def _cleanup(s: AsyncSession, ws: uuid.UUID) -> None:
-    for model in (LibraryPassage, LibraryEntryIndex, ResultCacheRow):
+    for model in (LibraryEntryIndex, ResultCacheRow):
         await s.execute(delete(model).where(model.workspace_id == ws))
     await s.commit()
 
 
 async def test_index_search_and_isolation(session: AsyncSession) -> None:
     ws, other = uuid.uuid4(), uuid.uuid4()
-    index = PgLibraryIndex(session)
+    index = PgLibraryIndex(session, QdrantPassages(AsyncQdrantClient(location=":memory:")))
     try:
         meta = EntryMeta("e1", "Acme", "Fleet", "Logistics", "won", 2025)
         texts = ["offline driver mobile app", "employee leave portal"]

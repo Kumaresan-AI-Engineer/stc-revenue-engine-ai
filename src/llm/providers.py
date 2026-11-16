@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 
 from core.config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_DIMENSIONS, get_settings
 from core.errors import UpstreamError
+from llm.chat_completions_provider import ChatCompletionsLLM
 from llm.local_embedder import LocalEmbedder
 from llm.openai_provider import OpenAILLM
 from llm.ports import LLM, Embedder
@@ -17,12 +18,24 @@ def _client() -> AsyncOpenAI:
     key = settings.openai_api_key.get_secret_value()
     if not key:
         raise UpstreamError("The AI provider is not configured (RE_AI_OPENAI_API_KEY).")
-    return AsyncOpenAI(api_key=key, timeout=settings.request_timeout_s, max_retries=2)
+    return AsyncOpenAI(
+        api_key=key,
+        base_url=settings.openai_base_url or None,
+        timeout=settings.request_timeout_s,
+        max_retries=2,
+    )
+
+
+PROVIDERS: dict[str, type[OpenAILLM] | type[ChatCompletionsLLM]] = {
+    "responses": OpenAILLM,
+    "chat_completions": ChatCompletionsLLM,
+}
 
 
 @lru_cache
 def get_llm() -> LLM:
-    return OpenAILLM(_client(), get_settings())
+    settings = get_settings()
+    return PROVIDERS[settings.llm_api](_client(), settings)
 
 
 @lru_cache

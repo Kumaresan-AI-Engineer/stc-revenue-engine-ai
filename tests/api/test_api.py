@@ -149,6 +149,8 @@ async def test_analyse_drops_features_the_reviewer_rejects(env: Env) -> None:
     body = (await _analyse(env)).json()
     assert body["features"] == []
     assert body["rejected"] == [{"item": "feature:tracking", "reason": "Quote is too vague."}]
+    # A verdict is not fixed by extracting again, so it costs no second pass.
+    assert env.llm.count("extraction") == 1 and env.llm.count("review") == 1
 
 
 async def test_analyse_refuses_unsupported_files_and_bad_catalogue(env: Env) -> None:

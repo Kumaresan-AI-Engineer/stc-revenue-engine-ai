@@ -74,24 +74,30 @@ async def _attempt(
     notes: list[str],
     settings: Settings,
     usage: Usage,
-) -> tuple[Extraction, dict[str, str]]:
+) -> tuple[Extraction, dict[str, str], dict[str, str]]:
+    """One extraction, checked and reviewed: (result, misquoted items, items the reviewer rejected)."""
     done = await extraction.extract(llm, catalogue, window, notes, settings.extraction_effort)
     usage.add(done.usage)
     checked, rejected = extraction.check(done.value, window, {f.key for f in catalogue})
     labels = {f.key: f.label for f in catalogue}
     reviewed = await review.review(llm, _review_items(checked, labels), settings.review_effort)
     usage.add(reviewed.usage)
-    problems = {r.item: r.reason for r in rejected} | reviewed.failed
-    return _drop(checked, reviewed.failed), problems
+    return _drop(checked, reviewed.failed), {r.item: r.reason for r in rejected}, reviewed.failed
 
 
 async def _window(
     llm: LLM, catalogue: list[CatalogueFeature], window: list[Page], settings: Settings
 ) -> _WindowResult:
     usage = Usage()
-    result, problems = await _attempt(llm, catalogue, window, [], settings, usage)
-    if problems:
-        result, problems = await _attempt(llm, catalogue, window, notes_from(problems), settings, usage)
+    result, misquoted, refused = await _attempt(llm, catalogue, window, [], settings, usage)
+    # Only a misquote can be fixed by asking again (the model finds the right words). The reviewer's
+    # verdicts are judgments: those items are already dropped, and a whole second extraction to repeat
+    # them doubled the latency without improving the result.
+    if misquoted:
+        result, misquoted, refused = await _attempt(
+            llm, catalogue, window, notes_from(misquoted), settings, usage
+        )
+    problems = misquoted | refused
     return _WindowResult(result, [Rejection(item, reason) for item, reason in problems.items()], usage)
 
 

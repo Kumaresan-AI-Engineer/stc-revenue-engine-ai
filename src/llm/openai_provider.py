@@ -106,18 +106,18 @@ class OpenAILLM:
                         }
                     )
             for c in calls:
-                items.append(
-                    {"type": "function_call_output", "call_id": c.call_id, "output": await _run(by_name, c)}
-                )
+                output = await run_tool(by_name, c.name, c.arguments)
+                items.append({"type": "function_call_output", "call_id": c.call_id, "output": output})
         raise UpstreamError(f"The AI provider did not finish {call.agent} within its tool budget.")
 
 
-async def _run(tools: dict[str, Tool], call: Any) -> str:
-    tool = tools.get(call.name)
+async def run_tool(tools: dict[str, Tool], name: str, arguments: str | None) -> str:
+    """Runs the tool the model asked for; a bad request gets an error text the model can act on."""
+    tool = tools.get(name)
     if tool is None:
-        return f"Unknown tool '{call.name}'."
+        return f"Unknown tool '{name}'."
     try:
-        args = json.loads(call.arguments or "{}")
+        args = json.loads(arguments or "{}")
     except json.JSONDecodeError:
         return "The arguments were not valid JSON."
     return await tool.run(args)

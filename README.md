@@ -4,9 +4,10 @@ The AI side of the proposal builder. The backend (`stc-revenue-engine-api`) stay
 the policy engine: **this service never changes business state, never sees another workspace's data and never
 writes a price.** It answers the backend with checked, structured results.
 
-OpenAI for the agents (Responses API, structured outputs) · free local embeddings (fastembed,
-`BAAI/bge-small-en-v1.5`, no key, documents never leave the service) · Python 3.12 · FastAPI · PostgreSQL 16 +
-pgvector.
+OpenAI for the agents (Responses API, structured outputs; or an OpenAI-compatible gateway such as Yantra through
+Chat Completions: `RE_AI_OPENAI_BASE_URL`, `RE_AI_LLM_API=chat_completions`, answers validated and corrected once) · free local embeddings (fastembed,
+`BAAI/bge-small-en-v1.5`, no key, documents never leave the service) · Python 3.12 · FastAPI · Qdrant (vector
+database, embedded by default: a local folder, no server) · PostgreSQL 16 (entry index and caches, no extensions).
 
 ## The agents
 
@@ -14,7 +15,7 @@ Four agents with one job each, run in a fixed order by code (no AI decides what 
 
 | Step | Agent | What it does | Checked by |
 |---|---|---|---|
-| 1 → 2 Analyse | **Requirement Extraction** | Reads the RFP: catalogue features (an enum of the catalogue sent), custom requirements, the RFP's questions, required documents, facts, unclear points. Every item has a quote + page. | code: quote is on the page · Review Agent: features and custom requirements |
+| 1 → 2 Analyse | **Requirement Extraction** | Reads the RFP: catalogue features (an enum of the catalogue sent), custom requirements, the RFP's questions, required documents, facts, unclear points. Every item has a quote + page. | code: quote is on the page (a misquote is asked again once) · Review Agent: features and custom requirements (rejected ones are dropped, not re-extracted) |
 | 3 Matches | *Semantic search* (no LLM) | Past proposals covering each requirement (incl. custom ones), and similar projects | fixed threshold and order |
 | 4 Responses | **Response Drafting** (tools) | Searches only the selected past proposals (`search_library`, `get_passage`, ≤ 5 calls) and drafts an answer whose every claim quotes a passage it read | code: passage was read, quote is in it, no amounts · Review Agent |
 | 5 Queries | **Clarification** | Questions for the client: why we ask, a sample answer, the assumption we price on | code: topic id, no amounts, no repeats · Review Agent |
@@ -64,7 +65,7 @@ workspace comes only from the token.
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
-docker compose up -d                                   # Postgres 16 + pgvector on port 5433
+docker compose up -d                                   # Postgres 16 on port 5433 (Qdrant is embedded)
 cp .env.example .env                                   # set RE_AI_OPENAI_API_KEY and RE_AI_SERVICE_TOKEN_SECRET
 .venv/Scripts/python -m alembic upgrade head
 cd src && ../.venv/Scripts/uvicorn main:app --reload --port 8001

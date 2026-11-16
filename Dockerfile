@@ -13,7 +13,8 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-smal
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-RUN useradd --create-home app && chown -R app /app/models
+ENV RE_AI_QDRANT_PATH=/app/data/qdrant
+RUN useradd --create-home app && mkdir -p /app/data/qdrant && chown -R app /app/models /app/data
 USER app
 WORKDIR /app/src
 EXPOSE 8001

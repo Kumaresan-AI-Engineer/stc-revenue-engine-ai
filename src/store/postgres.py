@@ -1,8 +1,4 @@
-"""Postgres + pgvector implementations of the storage interfaces.
-
-Search is an exact cosine scan inside one workspace (no approximate index), so the same query over
-the same library always returns the same passages in the same order.
-"""
+"""Postgres implementations of the storage interfaces; passage vectors live in Qdrant (store/vector_db.py)."""
 
 import uuid
 from typing import Any
@@ -14,23 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import db
 from documents.chunking import Passage
-from store.models import EmbeddingCacheRow, LibraryEntryIndex, LibraryPassage, ResultCacheRow
+from store.models import EmbeddingCacheRow, LibraryEntryIndex, ResultCacheRow
 from store.ports import EntryMeta, Hit, StoredPassage
-
-SIMILARITY_DECIMALS = 4
+from store.vector_db import QdrantPassages, get_passages
 
 
 def _meta(row: LibraryEntryIndex) -> EntryMeta:
     return EntryMeta(row.entry_id, row.client, row.title, row.industry, row.outcome, row.year)
 
 
-def _passage(row: LibraryPassage) -> StoredPassage:
-    return StoredPassage(row.id, row.entry_id, row.section, row.page, row.text)
-
-
 class PgLibraryIndex:
-    def __init__(self, session: AsyncSession) -> None:
+    """Entry metadata in Postgres, passages and vectors in Qdrant."""
+
+    def __init__(self, session: AsyncSession, passages: QdrantPassages) -> None:
         self._s = session
+        self._passages = passages
 
     async def replace_entry(
         self,
@@ -53,27 +47,11 @@ class PgLibraryIndex:
                 content_hash=content_hash,
             )
         )
-        self._s.add_all(
-            LibraryPassage(
-                workspace_id=workspace_id,
-                id=p.id,
-                entry_id=meta.entry_id,
-                section=p.section,
-                page=p.page,
-                ordinal=p.ordinal,
-                text=p.text,
-                embedding=v,
-            )
-            for p, v in zip(passages, vectors, strict=True)
-        )
         await self._s.flush()
+        await self._passages.add(workspace_id, meta.entry_id, passages, vectors)
 
     async def delete_entry(self, workspace_id: uuid.UUID, entry_id: str) -> bool:
-        await self._s.execute(
-            delete(LibraryPassage).where(
-                LibraryPassage.workspace_id == workspace_id, LibraryPassage.entry_id == entry_id
-            )
-        )
+        await self._passages.delete(workspace_id, entry_id)
         result = await self._s.execute(
             delete(LibraryEntryIndex).where(
                 LibraryEntryIndex.workspace_id == workspace_id, LibraryEntryIndex.entry_id == entry_id
@@ -102,23 +80,12 @@ class PgLibraryIndex:
         sections: list[str] | None,
         limit: int,
     ) -> list[Hit]:
-        distance = LibraryPassage.embedding.cosine_distance(vector)
-        q = select(LibraryPassage, distance.label("distance")).where(
-            LibraryPassage.workspace_id == workspace_id
+        return await self._passages.search(
+            workspace_id, vector, entry_ids=entry_ids, sections=sections, limit=limit
         )
-        if entry_ids is not None:
-            q = q.where(LibraryPassage.entry_id.in_(entry_ids))
-        if sections is not None:
-            q = q.where(LibraryPassage.section.in_(sections))
-        q = q.order_by(distance, LibraryPassage.id).limit(limit)
-        return [
-            Hit(_passage(row), round(1 - float(dist), SIMILARITY_DECIMALS))
-            for row, dist in (await self._s.execute(q)).all()
-        ]
 
     async def passage(self, workspace_id: uuid.UUID, passage_id: str) -> StoredPassage | None:
-        row = await self._s.get(LibraryPassage, (workspace_id, passage_id))
-        return _passage(row) if row else None
+        return await self._passages.get(workspace_id, passage_id)
 
 
 class PgEmbeddingCache:
@@ -150,8 +117,10 @@ class PgResultCache:
         await self._s.execute(stmt.on_conflict_do_nothing(index_elements=["workspace_id", "key"]))
 
 
-def library_index(session: AsyncSession = Depends(db)) -> PgLibraryIndex:
-    return PgLibraryIndex(session)
+def library_index(
+    session: AsyncSession = Depends(db), passages: QdrantPassages = Depends(get_passages)
+) -> PgLibraryIndex:
+    return PgLibraryIndex(session, passages)
 
 
 def embedding_cache(session: AsyncSession = Depends(db)) -> PgEmbeddingCache:

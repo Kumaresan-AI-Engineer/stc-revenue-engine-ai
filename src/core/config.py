@@ -9,8 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
-# The pgvector column is created with this size by migration 0001; another embedding model needs a
-# new migration and a re-index, never a silent change.
+# The Qdrant collection is created with this size; another embedding model needs a new collection and a
+# re-index, never a silent change.
 EMBEDDING_DIMENSIONS = 384
 # Local, free embedding models (fastembed) and their vector size.
 EMBEDDING_MODEL_DIMENSIONS = {"BAAI/bge-small-en-v1.5": 384, "sentence-transformers/all-MiniLM-L6-v2": 384}
@@ -21,8 +21,19 @@ class Settings(BaseSettings):
 
     env: Literal["local", "test", "staging", "production"] = "local"
     database_url: str = "postgresql+asyncpg://revenue_ai:revenue_ai@localhost:5433/revenue_ai"
+    # Vector database (Qdrant). Empty URL: embedded, stored in qdrant_path; set a URL for a Qdrant server.
+    qdrant_url: str = ""
+    qdrant_api_key: SecretStr = SecretStr("")
+    qdrant_path: str = ".qdrant"
 
     openai_api_key: SecretStr = SecretStr("")
+    # Empty: OpenAI itself. Set it to use an OpenAI-compatible gateway.
+    openai_base_url: str = ""
+    # "responses": OpenAI's Responses API (enforced schemas, reasoning with tools). "chat_completions": for
+    # gateways that only serve Chat Completions (e.g. Yantra); answers are validated and corrected instead.
+    llm_api: Literal["responses", "chat_completions"] = "responses"
+    # Output budget per Chat Completions call, reasoning tokens included.
+    max_output_tokens: int = Field(default=32000, ge=1024, le=128000)
     # Pinned snapshot: the same input must keep producing the same kind of output (determinism).
     chat_model: str = "gpt-5.5-2026-04-23"
     # Free and local (fastembed, ONNX on CPU): no key, and documents never leave the service.
