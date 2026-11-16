@@ -386,6 +386,18 @@ async def test_client_queries_checked_reviewed_and_cached(env: Env) -> None:
     assert again["meta"]["cached"] is True and env.llm.count("clarification") == 1
 
 
+async def test_client_queries_are_not_asked_again_when_the_limit_is_already_met(env: Env) -> None:
+    env.llm.on(
+        "clarification",
+        lambda call: {"questions": [_question("u1", "How many vehicles?"), _question("zz", "Unknown?")]},
+    )
+    env.llm.on("review", approve_all)
+    body = {**QUERY_BODY, "limit": 1}
+    r = await env.client.post("/v1/proposals/client-queries", json=body, headers=env.auth())
+    assert [q["question"] for q in r.json()["questions"]] == ["How many vehicles?"]
+    assert env.llm.count("clarification") == 1 and env.llm.count("review") == 1
+
+
 async def test_client_queries_retry_keeps_good_questions_and_reports_dropped(env: Env) -> None:
     answers = iter(
         [

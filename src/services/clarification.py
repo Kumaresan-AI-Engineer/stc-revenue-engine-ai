@@ -65,7 +65,9 @@ async def client_queries(
     data = _input(req)
     usage = Usage()
     questions, problems = await _attempt(llm, data, [], settings, usage)
-    if problems:
+    # A second round only to make up a shortfall: with `limit` good questions in hand, asking and reviewing
+    # again cannot improve what is returned, it only doubles the wait ('Suggest with AI' targets 10 s).
+    if problems and len(questions) < req.limit:
         retry, problems = await _attempt(llm, data, problems, settings, usage)
         # Keep good questions from the first attempt too; the rules drop any repeat.
         merged = clarification.ClarificationOutput(questions=questions + retry)
