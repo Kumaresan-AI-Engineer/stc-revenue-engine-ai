@@ -1,13 +1,18 @@
 """Turn an uploaded document into numbered pages of plain text. Deterministic; no model involved.
 
 PDF pages are real pages. Word and Excel have no fixed pages, so a Word "page" is a block of
-paragraphs and an Excel "page" is one sheet; the number is what a citation points at.
+paragraphs and an Excel "page" is one sheet; the number is what a citation points at. A PDF page with no
+text layer (a scan) is read with OCR when the caller allows it (`ocr_max_pages`).
 """
 
 import io
+import logging
 from dataclasses import dataclass
 
 from core.errors import RuleViolation
+from documents.ocr import ocr_pdf_pages
+
+log = logging.getLogger(__name__)
 
 WORD_PARAGRAPHS_PER_PAGE = 40
 TEXT_EXTENSIONS = (".txt", ".md", ".eml")
@@ -47,11 +52,34 @@ def _xlsx(data: bytes) -> list[str]:
     return pages
 
 
-def extract_pages(filename: str, data: bytes) -> list[Page]:
+@dataclass(frozen=True)
+class ReadDocument:
+    pages: list[Page]
+    ocr: bool  # some pages were read with OCR
+
+
+def _with_ocr(data: bytes, texts: list[str], max_pages: int) -> tuple[list[str], bool]:
+    """Fill the pages without a text layer by OCR, the first `max_pages` of them."""
+    blank = [i for i, t in enumerate(texts) if not t.strip()][:max_pages]
+    if not blank:
+        return texts, False
+    try:
+        read = ocr_pdf_pages(data, blank)
+    except Exception:
+        # OCR is a best effort: without it the scan is refused below with a clear reason.
+        log.exception("ocr_failed")
+        return texts, False
+    return [read.get(i, t) for i, t in enumerate(texts)], any(v.strip() for v in read.values())
+
+
+def read_document(filename: str, data: bytes, *, ocr_max_pages: int = 0) -> ReadDocument:
     name = filename.lower()
+    ocr = False
     try:
         if name.endswith(".pdf"):
             texts = _pdf(data)
+            if ocr_max_pages:
+                texts, ocr = _with_ocr(data, texts, ocr_max_pages)
         elif name.endswith(".docx"):
             texts = _docx(data)
         elif name.endswith((".xlsx", ".xlsm")):
@@ -66,9 +94,12 @@ def extract_pages(filename: str, data: bytes) -> list[Page]:
         raise RuleViolation("file_unreadable", f"We could not read '{filename}'.") from exc
     pages = [Page(i + 1, t.strip()) for i, t in enumerate(texts) if t.strip()]
     if not pages:
-        # Scanned PDFs have no text layer; OCR is a later step.
-        raise RuleViolation("file_empty", f"'{filename}' has no readable text (is it a scan?).")
-    return pages
+        raise RuleViolation("file_empty", f"'{filename}' has no readable text.")
+    return ReadDocument(pages, ocr)
+
+
+def extract_pages(filename: str, data: bytes, *, ocr_max_pages: int = 0) -> list[Page]:
+    return read_document(filename, data, ocr_max_pages=ocr_max_pages).pages
 
 
 def page_windows(pages: list[Page], max_chars: int) -> list[list[Page]]:

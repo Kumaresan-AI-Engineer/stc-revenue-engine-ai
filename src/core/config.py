@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     drafting_effort: ReasoningEffort | None = "medium"
     clarification_effort: ReasoningEffort | None = "low"
     review_effort: ReasoningEffort | None = "medium"
+    # Reading an uploaded final proposal against the draft: a fact-finding task, kept fast (< 30 s).
+    final_check_effort: ReasoningEffort | None = "low"
     # Only sent when set, and only accepted by non-reasoning models (e.g. gpt-4.1).
     temperature: float | None = Field(default=None, ge=0, le=2)
     request_timeout_s: float = 120.0
@@ -53,8 +55,18 @@ class Settings(BaseSettings):
     # against the backend's JWKS (ARCHITECTURE §10).
     service_token_secret: SecretStr = SecretStr("")
     service_token_audience: str = "revenue-engine-ai"
+    service_token_issuer: str = "revenue-engine-api"
+    # Job callbacks are signed with this shared secret (HMAC-SHA256; the backend's RE_AI_CALLBACK_SECRET).
+    callback_secret: SecretStr = SecretStr("")
+    # A job's file_url must start with one of these (the backend's object storage), so a job can never make
+    # this service fetch an arbitrary address.
+    file_url_prefixes: list[str] = ["http://localhost:9000/", "http://127.0.0.1:9000/"]
+    # Jobs run in this process, at most this many at once; the rest wait their turn.
+    max_parallel_jobs: int = Field(default=4, ge=1, le=32)
 
     max_upload_mb: int = Field(default=25, ge=1, le=100)
+    # Scanned PDF pages (no text layer) are read with OCR, at most this many per document.
+    ocr_max_pages: int = Field(default=100, ge=0, le=500)
 
 
 @lru_cache

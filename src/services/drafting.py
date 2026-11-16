@@ -2,6 +2,9 @@
 
 Per question, in parallel: skip pricing (code) → draft with tools (agent) → check claims against the
 passages it read (code) → review (agent) → one retry with the problems as notes → else "needs a person".
+
+Sources: the selected past proposals except lost ones (never an answer source), won ones first. A draft's
+confidence says how much checking it needed: accepted at the first try, or only after a correction.
 """
 
 import asyncio
@@ -13,6 +16,7 @@ from agents.drafting import Claim, DraftOutput, Library, QuestionContext
 from agents.review import ReviewItem
 from api.schemas import (
     AnswerOut,
+    CitationOut,
     ClaimOut,
     DraftAnswersRequest,
     DraftAnswersResponse,
@@ -26,9 +30,13 @@ from llm.ports import LLM, Usage
 from rules.text import is_pricing_question, stable_hash
 from services.common import meta
 from services.vectors import Vectorizer
-from store.ports import Hit, LibraryIndex, ResultCache, StoredPassage
+from store.ports import EntryMeta, Hit, LibraryIndex, ResultCache, StoredPassage
 
-VERSIONS = {"drafting": drafting.PROMPT_VERSION, "review": review.PROMPT_VERSION}
+# "answer" versions the shape of a cached answer (confidence and citations were added in v2).
+VERSIONS = {"drafting": drafting.PROMPT_VERSION, "review": review.PROMPT_VERSION, "answer": "answer-v2"}
+FIRST_TRY_CONFIDENCE = 0.9
+CORRECTED_CONFIDENCE = 0.7
+ONLY_LOST = "Only lost proposals were selected, and they are never used as sources."
 ANSWER_RULE = (
     "Every fact in the statement must be supported by the evidence. The statement must contain no "
     "prices, rates or fees."
@@ -50,9 +58,41 @@ class _Db:
 
 
 def _answer(
-    q: QuestionIn, status: DraftStatus, reason: str, answer: str = "", claims: list[ClaimOut] | None = None
+    q: QuestionIn,
+    status: DraftStatus,
+    reason: str,
+    answer: str = "",
+    claims: list[ClaimOut] | None = None,
+    confidence: float = 0.0,
+    titles: dict[str, str] | None = None,
 ) -> AnswerOut:
-    return AnswerOut(id=q.id, status=status, answer=answer, claims=claims or [], reason=reason)
+    claims = claims or []
+    citations = [
+        CitationOut(
+            source_id=c.entry_id,
+            title=(titles or {}).get(c.entry_id, c.entry_id),
+            quote=c.quote,
+            page=c.page,
+            passage_id=c.passage_id,
+        )
+        for c in claims
+    ]
+    return AnswerOut(
+        id=q.id,
+        status=status,
+        answer=answer,
+        claims=claims,
+        reason=reason,
+        confidence=confidence,
+        no_confident_source=status == "needs_person",
+        citations=citations,
+    )
+
+
+def _sources(entries: dict[str, EntryMeta]) -> list[str]:
+    """Usable sources: never a lost proposal; won ones first, then by id (a stable order)."""
+    usable = [e for e, m in entries.items() if m.outcome != "lost"]
+    return sorted(usable, key=lambda e: (entries[e].outcome != "won", e))
 
 
 def _claims_out(claims: list[Claim], retrieved: dict[str, StoredPassage]) -> list[ClaimOut]:
@@ -69,10 +109,16 @@ def _claims_out(claims: list[Claim], retrieved: dict[str, StoredPassage]) -> lis
 
 
 async def _draft_one(
-    q: QuestionIn, ctx: QuestionContext, library: Library, llm: LLM, settings: Settings, usage: Usage
+    q: QuestionIn,
+    ctx: QuestionContext,
+    library: Library,
+    llm: LLM,
+    settings: Settings,
+    usage: Usage,
+    titles: dict[str, str],
 ) -> AnswerOut:
     notes: list[str] = []
-    for _ in range(2):
+    for attempt in range(2):
         done = await drafting.draft(llm, ctx, library, notes, settings.drafting_effort)
         usage.add(done.usage)
         out: DraftOutput = done.value
@@ -86,7 +132,9 @@ async def _draft_one(
             reviewed = await review.review(llm, [item], settings.review_effort)
             usage.add(reviewed.usage)
             if not reviewed.failed:
-                return _answer(q, "drafted", "", out.answer, _claims_out(claims, library.retrieved))
+                confidence = FIRST_TRY_CONFIDENCE if attempt == 0 else CORRECTED_CONFIDENCE
+                claims_out = _claims_out(claims, library.retrieved)
+                return _answer(q, "drafted", "", out.answer, claims_out, confidence, titles)
             problems = [f"Reviewer: {reason}" for reason in reviewed.failed.values()]
         notes = problems
     return _answer(
@@ -111,8 +159,10 @@ async def draft_answers(
         raise RuleViolation(
             "library_not_indexed", f"These proposals are not indexed yet: {', '.join(missing)}."
         )
-    hashes = await index.content_hashes(ws, selected)
+    sources = _sources(entries)
+    hashes = await index.content_hashes(ws, sources)
     labels = {e: f"{m.client} — {m.title} ({m.year}, {m.outcome})" for e, m in entries.items()}
+    titles = {e: f"{m.client} — {m.title} ({m.year})" for e, m in entries.items()}
     question_ctx = (req.rfp_summary, req.requirements)
     db = _Db()
     usage = Usage()
@@ -121,7 +171,7 @@ async def draft_answers(
         async def run() -> list[Hit]:
             vector = (await vectors.embed([query]))[0]
             return await index.search(
-                ws, vector, entry_ids=selected, sections=["rfp", "proposal"], limit=drafting.SEARCH_RESULTS
+                ws, vector, entry_ids=sources, sections=["rfp", "proposal"], limit=drafting.SEARCH_RESULTS
             )
 
         return await db.run(run)
@@ -134,12 +184,14 @@ async def draft_answers(
             return _answer(q, "skipped", "A person writes this one.")
         if is_pricing_question(q.text):
             return _answer(q, "skipped_pricing", "Pricing is never drafted by AI. A person writes this one.")
+        if not sources:
+            return _answer(q, "needs_person", ONLY_LOST)
         key = stable_hash("draft", q.text, question_ctx, sorted(hashes.items()), llm.model, VERSIONS)
         if cached := await db.run(lambda: cache.get(ws, key)):
             return AnswerOut(**{**cached, "id": q.id})
-        library = Library(ws, selected, labels, search, fetch)
+        library = Library(ws, sources, labels, search, fetch)
         context = QuestionContext(q.text, req.rfp_summary, req.requirements)
-        answer = await _draft_one(q, context, library, llm, settings, usage)
+        answer = await _draft_one(q, context, library, llm, settings, usage, titles)
         if answer.status == "drafted":
             await db.run(lambda: cache.put(ws, key, "draft", answer.model_dump()))
         return answer

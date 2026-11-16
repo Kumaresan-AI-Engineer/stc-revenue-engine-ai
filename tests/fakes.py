@@ -6,6 +6,7 @@ import math
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 from core.config import EMBEDDING_DIMENSIONS
 from documents.chunking import Passage
 from llm.ports import AgentCall, Completion, Tool, Usage
+from store.jobs import QUEUED, RUNNING, Job
 from store.ports import EntryMeta, Hit, StoredPassage
 
 Handler = Callable[[AgentCall[Any]], BaseModel | dict[str, Any]]
@@ -165,3 +167,28 @@ class InMemoryResultCache:
 
     async def put(self, workspace_id: uuid.UUID, key: str, kind: str, payload: dict[str, Any]) -> None:
         self.rows.setdefault((workspace_id, key), payload)
+
+
+class InMemoryJobStore:
+    def __init__(self) -> None:
+        self.jobs: dict[str, Job] = {}
+
+    async def create_or_get(
+        self, workspace_id: uuid.UUID, job_type: str, idempotency_key: str
+    ) -> tuple[Job, bool]:
+        for job in self.jobs.values():
+            if job.workspace_id == workspace_id and job.idempotency_key == idempotency_key:
+                return job, False
+        job = Job(str(uuid.uuid4()), workspace_id, job_type, idempotency_key, QUEUED, None)
+        self.jobs[job.id] = job
+        return job, True
+
+    async def get(self, workspace_id: uuid.UUID, job_id: str) -> Job | None:
+        job = self.jobs.get(job_id)
+        return job if job and job.workspace_id == workspace_id else None
+
+    async def start(self, job_id: str) -> None:
+        self.jobs[job_id] = replace(self.jobs[job_id], status=RUNNING)
+
+    async def finish(self, job_id: str, status: str, error: str | None = None) -> None:
+        self.jobs[job_id] = replace(self.jobs[job_id], status=status, error=error)

@@ -10,10 +10,11 @@ from fakes import approve_all
 from agents.drafting import Claim
 from llm.ports import AgentCall, Tool
 
+# As the backend sends it: {key, label, commodity, kw}.
 CATALOGUE = [
-    {"key": "tracking", "label": "Real-time tracking", "keywords": ["gps", "tracking"], "standard": False},
-    {"key": "driverapp", "label": "Driver mobile app", "keywords": ["driver app"], "standard": False},
-    {"key": "auth", "label": "Login", "keywords": ["sign in"], "standard": True},
+    {"key": "tracking", "label": "Real-time tracking", "kw": ["gps", "tracking"], "commodity": False},
+    {"key": "driverapp", "label": "Driver mobile app", "kw": ["driver app"], "commodity": False},
+    {"key": "auth", "label": "Login", "kw": ["sign in"], "commodity": True},
 ]
 RFP = (
     b"Acme Logistics invites proposals. We need real-time GPS tracking of 400 trucks.\n"
@@ -79,7 +80,15 @@ async def test_analyse_returns_grounded_requirements_and_caches(env: Env) -> Non
     env.llm.on(
         "extraction",
         lambda call: _form(
-            features=[{"key": "tracking", "quote": "real-time GPS tracking of 400 trucks", "page": 1}],
+            features=[
+                {
+                    "key": "tracking",
+                    "quote": "real-time GPS tracking of 400 trucks",
+                    "page": 1,
+                    "confidence": 1.4,
+                },
+                {"key": "auth", "quote": "Acme Logistics invites proposals", "page": 1, "confidence": 0.5},
+            ],
             custom_requirements=[{"label": "Offline driver app", "quote": "works offline", "page": 1}],
             questions=[
                 {
@@ -97,12 +106,19 @@ async def test_analyse_returns_grounded_requirements_and_caches(env: Env) -> Non
     r = await _analyse(env)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert [f["key"] for f in body["features"]] == ["tracking"]
-    assert body["custom_requirements"][0]["label"] == "Offline driver app"
-    assert body["facts"][0]["value"] == "2026-12-01"
-    assert body["rejected"] == []
+    # Core vs standard by the catalogue's commodity flag; confidence clamped to 0..1.
+    assert body["core"] == [
+        {"key": "tracking", "confidence": 1.0, "evidence": "real-time GPS tracking of 400 trucks", "page": 1}
+    ]
+    assert body["standard"] == ["auth"] and body["standard_evidence"][0]["key"] == "auth"
+    assert body["unmatched"] == [{"label": "Offline driver app", "evidence": "works offline", "page": 1}]
+    assert body["questions"] == [
+        {"text": "Describe your ISO 27001 certification.", "page": 1, "evidence": "describe your ISO 27001"}
+    ]
+    assert (body["due_date"], body["start_date"], body["budget_hint"]) == ("2026-12-01", None, None)
+    assert body["rejected"] == [] and body["ocr"] is False and body["pages"] == 1
     assert (
-        body["meta"]["cached"] is False and body["meta"]["prompt_versions"]["extraction"] == "extraction-v1"
+        body["meta"]["cached"] is False and body["meta"]["prompt_versions"]["extraction"] == "extraction-v2"
     )
     # The catalogue is in the instructions, so the long fixed prefix is cacheable.
     first = next(c for c in env.llm.calls if c.agent == "extraction")
@@ -118,8 +134,8 @@ async def test_analyse_returns_grounded_requirements_and_caches(env: Env) -> Non
 
 async def test_analyse_retries_once_with_notes_then_drops_what_still_fails(env: Env) -> None:
     def extract(call: AgentCall[Any]) -> dict[str, Any]:
-        invented = {"key": "driverapp", "quote": "drivers fly drones", "page": 1}
-        good = {"key": "tracking", "quote": "real-time GPS tracking", "page": 1}
+        invented = {"key": "driverapp", "quote": "drivers fly drones", "page": 1, "confidence": 0.9}
+        good = {"key": "tracking", "quote": "real-time GPS tracking", "page": 1, "confidence": 0.9}
         return _form(features=[good, invented])
 
     def review_call(call: AgentCall[Any]) -> dict[str, Any]:
@@ -132,13 +148,16 @@ async def test_analyse_retries_once_with_notes_then_drops_what_still_fails(env: 
     assert env.llm.count("extraction") == 2
     retry = [c for c in env.llm.calls if c.agent == "extraction"][1]
     assert "feature 'driverapp': its quote is not in the document" in retry.input
-    assert [f["key"] for f in body["features"]] == ["tracking"]
+    assert [f["key"] for f in body["core"]] == ["tracking"]
     assert body["rejected"] == [{"item": "feature 'driverapp'", "reason": "its quote is not in the document"}]
 
 
 async def test_analyse_drops_features_the_reviewer_rejects(env: Env) -> None:
     env.llm.on(
-        "extraction", lambda call: _form(features=[{"key": "tracking", "quote": "GPS tracking", "page": 1}])
+        "extraction",
+        lambda call: _form(
+            features=[{"key": "tracking", "quote": "GPS tracking", "page": 1, "confidence": 0.8}]
+        ),
     )
     env.llm.on(
         "review",
@@ -147,7 +166,7 @@ async def test_analyse_drops_features_the_reviewer_rejects(env: Env) -> None:
         },
     )
     body = (await _analyse(env)).json()
-    assert body["features"] == []
+    assert body["core"] == []
     assert body["rejected"] == [{"item": "feature:tracking", "reason": "Quote is too vague."}]
     # A verdict is not fixed by extracting again, so it costs no second pass.
     assert env.llm.count("extraction") == 1 and env.llm.count("review") == 1

@@ -27,6 +27,8 @@ def _input(req: ClientQueriesRequest) -> ClarificationInput:
         unclear_points=[Topic(u.id, u.text) for u in req.unclear_points],
         engagement_model=req.engagement_model,
         existing_questions=req.existing_questions,
+        existing_assumptions=req.existing_assumptions,
+        limit=req.limit,
     )
 
 
@@ -68,6 +70,7 @@ async def client_queries(
         # Keep good questions from the first attempt too; the rules drop any repeat.
         merged = clarification.ClarificationOutput(questions=questions + retry)
         questions, _ = clarification.check(merged, data)
+    questions = questions[: req.limit]
     dropped = sorted(problems)
     response = ClientQueriesResponse(
         questions=questions, dropped=dropped, meta=meta(llm.model, VERSIONS, usage, cached=False)

@@ -26,7 +26,8 @@ fakes (`tests/fakes.py`: scripted `FakeLLM`, word-hash `FakeEmbedder`, in-memory
 ## How it fits together
 
 - **Layers:** `api/router.py` (HTTP only) → `services/` (one use-case per step: analyse, library, drafting,
-  clarification) → `agents/` (prompt + output schema + pure `check`) and `store/` (Qdrant + Postgres). `rules/` and
+  clarification, final_check; `services/jobs.py` runs asynchronous jobs: a new job type is an entry in
+  `HANDLERS`, events are signed with `core/signing.py`) → `agents/` (prompt + output schema + pure `check`) and `store/` (Qdrant + Postgres). `rules/` and
   `documents/` are pure. Agents depend on `llm/ports.py` (`LLM`, `Embedder`), never on OpenAI directly;
   `llm/openai_provider.py` (Responses API) and `llm/chat_completions_provider.py` (gateways such as Yantra,
   `RE_AI_LLM_API=chat_completions`) are the only files that import `openai`.
@@ -35,7 +36,8 @@ fakes (`tests/fakes.py`: scripted `FakeLLM`, word-hash `FakeEmbedder`, in-memory
 - **Determinism is a feature:** changing a prompt means bumping its `PROMPT_VERSION` (part of every cache key);
   changing the embedding model needs a new migration (vector size) and a re-index; search order must stay
   stable (ties by id). Results are cached in `result_cache` keyed by everything that shaped them.
-- **Tenancy:** the workspace comes only from the service JWT (`core/security.py`); every store method takes it.
+- **Tenancy:** the workspace comes only from the service JWT (`core/security.py`, `aud` and `iss` checked); every
+  store method takes it. A job's file is fetched only from `RE_AI_FILE_URL_PREFIXES`.
   The drafting tools can only reach the selected entries.
 - **Hard rules:** no prices (amounts are redacted at indexing, pricing questions are skipped, amounts in output
   fail the check); estimates stay in the backend.

@@ -100,3 +100,34 @@ async def test_caches_round_trip(session: AsyncSession) -> None:
     finally:
         await session.rollback()
         await _cleanup(session, ws)
+
+
+async def test_job_store_is_idempotent_per_workspace_and_records_the_outcome() -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from store.jobs import FAILED, QUEUED, PgJobStore
+    from store.models import JobRow
+
+    engine = create_async_engine(get_settings().database_url)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1 FROM job LIMIT 1"))
+    except Exception:
+        await engine.dispose()
+        pytest.skip("Postgres with the job table is not reachable")
+    store = PgJobStore(async_sessionmaker(engine, expire_on_commit=False))
+    ws, other = uuid.uuid4(), uuid.uuid4()
+    try:
+        first, created = await store.create_or_get(ws, "rfp_analysis", "draft-1")
+        again, created_again = await store.create_or_get(ws, "rfp_analysis", "draft-1")
+        theirs, _ = await store.create_or_get(other, "rfp_analysis", "draft-1")
+        assert created and not created_again and again.id == first.id and first.status == QUEUED
+        assert theirs.id != first.id and await store.get(other, first.id) is None
+        await store.start(first.id)
+        await store.finish(first.id, FAILED, "The link expired.")
+        done = await store.get(ws, first.id)
+        assert done is not None and (done.status, done.error) == (FAILED, "The link expired.")
+    finally:
+        async with AsyncSession(engine) as s, s.begin():
+            await s.execute(delete(JobRow).where(JobRow.workspace_id.in_([ws, other])))
+        await engine.dispose()

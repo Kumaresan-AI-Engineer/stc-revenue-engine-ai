@@ -28,10 +28,10 @@ def get_engine() -> AsyncEngine:
 
 
 @lru_cache
-def _sessionmaker() -> async_sessionmaker[AsyncSession]:
+def sessionmaker() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(get_engine(), expire_on_commit=False)
 
 
 async def db() -> AsyncIterator[AsyncSession]:
-    async with _sessionmaker()() as session, session.begin():
+    async with sessionmaker()() as session, session.begin():
         yield session

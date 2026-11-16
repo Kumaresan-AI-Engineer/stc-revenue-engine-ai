@@ -6,9 +6,9 @@ from typing import Any
 from fastapi import Depends
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from core.db import db
+from core.db import db, sessionmaker
 from documents.chunking import Passage
 from store.models import EmbeddingCacheRow, LibraryEntryIndex, ResultCacheRow
 from store.ports import EntryMeta, Hit, StoredPassage
@@ -115,6 +115,26 @@ class PgResultCache:
     async def put(self, workspace_id: uuid.UUID, key: str, kind: str, payload: dict[str, Any]) -> None:
         stmt = insert(ResultCacheRow).values(workspace_id=workspace_id, key=key, kind=kind, payload=payload)
         await self._s.execute(stmt.on_conflict_do_nothing(index_elements=["workspace_id", "key"]))
+
+
+class PgStandaloneResultCache:
+    """The result cache for work outside a request (jobs): each read or write is its own transaction, so
+    no transaction stays open while a model is answering."""
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def get(self, workspace_id: uuid.UUID, key: str) -> dict[str, Any] | None:
+        async with self._sessions() as s:
+            return await PgResultCache(s).get(workspace_id, key)
+
+    async def put(self, workspace_id: uuid.UUID, key: str, kind: str, payload: dict[str, Any]) -> None:
+        async with self._sessions() as s, s.begin():
+            await PgResultCache(s).put(workspace_id, key, kind, payload)
+
+
+def pg_standalone_result_cache() -> PgStandaloneResultCache:
+    return PgStandaloneResultCache(sessionmaker())
 
 
 def library_index(

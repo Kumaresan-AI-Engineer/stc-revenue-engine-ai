@@ -79,6 +79,19 @@ def stable_hash(*parts: Any) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+# Two questions sharing this share of their words (Jaccard) ask the same thing in other words.
+NEAR_DUPLICATE = 0.75
+
+
+def near_duplicate(a: str, b: str) -> bool:
+    """The same text once normalised, or nearly the same words."""
+    ka, kb = dedupe_key(a), dedupe_key(b)
+    if ka == kb:
+        return True
+    wa, wb = set(ka.split()), set(kb.split())
+    return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= NEAR_DUPLICATE
+
+
 def dedupe_key(text: str) -> str:
     """Punctuation counts as a word break, so "real-time" and "real time" are the same item."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", normalize(text)).split())

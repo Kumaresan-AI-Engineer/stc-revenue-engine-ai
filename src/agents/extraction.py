@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Literal
 
-from pydantic import BaseModel, create_model
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, create_model
 
 from core.config import ReasoningEffort
 from documents.parsing import Page, render_pages
 from llm.ports import LLM, AgentCall, Completion
 from rules.text import contains_quote, dedupe_key
 
-PROMPT_VERSION = "extraction-v1"
+PROMPT_VERSION = "extraction-v2"
 
 INSTRUCTIONS = """You read part of a Request for Proposal (RFP) and fill in a form for our bid team.
 
@@ -24,7 +24,8 @@ Rules:
 - Every item needs `quote`: words copied exactly from the document (you may skip words with "...")
   and `page`: the number in the [Page N] marker above the quoted text.
 - features: catalogue capabilities the client asks for. Use only keys from the catalogue below and
-  pick one only when the document clearly asks for that capability.
+  pick one only when the document clearly asks for that capability. `confidence` (0 to 1): how plainly
+  the quote asks for exactly that capability (1 = named outright, 0.5 = implied).
 - custom_requirements: capabilities the client asks for that no catalogue entry covers, each with a
   short plain-words label.
 - questions: questions or response items the RFP asks the bidder to answer, in the RFP's own words.
@@ -42,10 +43,15 @@ FactName = Literal["client", "due_date", "start_date", "budget"]
 
 
 class CatalogueFeature(BaseModel):
-    key: str
-    label: str
-    keywords: list[str]
-    standard: bool  # commodity feature: kept in scope, not used for matching
+    """One catalogue entry, as the backend sends it ({key, label, commodity, kw})."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    key: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=200)
+    keywords: list[str] = Field(default_factory=list, validation_alias=AliasChoices("kw", "keywords"))
+    # Commodity feature (login, notifications, ...): kept in scope, not used for matching.
+    standard: bool = Field(False, validation_alias=AliasChoices("commodity", "standard"))
 
 
 class Quoted(BaseModel):
@@ -77,6 +83,7 @@ class Fact(Quoted):
 
 class FeatureHit(Quoted):
     key: str
+    confidence: float = 0.5
 
 
 class Extraction(BaseModel):
@@ -95,7 +102,7 @@ class Extraction(BaseModel):
 def output_model(keys: tuple[str, ...]) -> type[BaseModel]:
     """The form the model fills, with `features[].key` restricted to this catalogue."""
     key_type: Any = Literal[keys]  # type: ignore[valid-type]  # built from the catalogue at run time
-    hit = create_model("CatalogueFeatureHit", __base__=Quoted, key=(key_type, ...))
+    hit = create_model("CatalogueFeatureHit", __base__=Quoted, key=(key_type, ...), confidence=(float, ...))
     fields: dict[str, Any] = {
         name: (list[hit] if name == "features" else info.annotation, ...)  # type: ignore[valid-type]
         for name, info in Extraction.model_fields.items()
@@ -158,7 +165,11 @@ def check(
                 out.append(item.model_copy(update={"page": page}))
         return out
 
-    features = [f for f in result.features if f.key in catalogue_keys]
+    features = [
+        f.model_copy(update={"confidence": round(min(max(f.confidence, 0.0), 1.0), 2)})
+        for f in result.features
+        if f.key in catalogue_keys
+    ]
     checked = Extraction(
         summary=result.summary.strip(),
         features=keep("feature", "key", features),

@@ -11,7 +11,7 @@ from fastapi import Depends, Header
 from core.config import Settings, get_settings
 from core.errors import Unauthorized
 
-REQUIRED_CLAIMS = ["exp", "aud", "workspace_id", "actor_id"]
+REQUIRED_CLAIMS = ["exp", "aud", "iss", "workspace_id", "actor_id"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ def decode_service_token(token: str, settings: Settings) -> ServiceContext:
             secret,
             algorithms=["HS256"],
             audience=settings.service_token_audience,
+            issuer=settings.service_token_issuer,
             options={"require": REQUIRED_CLAIMS},
         )
         return ServiceContext(

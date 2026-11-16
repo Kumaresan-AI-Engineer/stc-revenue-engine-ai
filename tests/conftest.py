@@ -6,23 +6,36 @@ os.environ.update(
     {
         "RE_AI_ENV": "test",
         "RE_AI_SERVICE_TOKEN_SECRET": "test-secret-that-is-long-enough-for-hs256",
+        "RE_AI_CALLBACK_SECRET": "test-callback-secret-long-enough-1234",
+        "RE_AI_FILE_URL_PREFIXES": '["http://storage.test/"]',
+        "RE_AI_OCR_MAX_PAGES": "0",
         "RE_AI_OPENAI_API_KEY": "",
     }
 )
 
+import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 import jwt
 import pytest
-from fakes import FakeEmbedder, FakeLLM, InMemoryEmbeddingCache, InMemoryIndex, InMemoryResultCache
+from fakes import (
+    FakeEmbedder,
+    FakeLLM,
+    InMemoryEmbeddingCache,
+    InMemoryIndex,
+    InMemoryJobStore,
+    InMemoryResultCache,
+)
 
 from core.config import get_settings
 from llm.providers import get_embedder, get_llm
 from main import create_app
+from services.jobs import JobDeps, JobRunner, get_job_runner
 from services.vectors import Vectorizer, vectorizer
 from store.postgres import library_index, result_cache
 
@@ -33,11 +46,33 @@ def token(workspace_id: uuid.UUID, **overrides: object) -> str:
         "workspace_id": str(workspace_id),
         "actor_id": str(uuid.uuid4()),
         "aud": settings.service_token_audience,
+        "iss": settings.service_token_issuer,
         "exp": int(time.time()) + 60,
         "can_see_restricted": False,
     }
     claims.update(overrides)
     return jwt.encode(claims, settings.service_token_secret.get_secret_value(), algorithm="HS256")
+
+
+@dataclass
+class Outside:
+    """What the jobs reach over HTTP: files to download, and the backend's callback (which records what it
+    got and answers with the next scripted status, 200 when none is left)."""
+
+    files: dict[str, bytes] = field(default_factory=dict)
+    callbacks: list[httpx.Request] = field(default_factory=list)
+    callback_statuses: list[int] = field(default_factory=list)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET":
+            data = self.files.get(url)
+            return httpx.Response(200, content=data) if data is not None else httpx.Response(403)
+        self.callbacks.append(request)
+        return httpx.Response(self.callback_statuses.pop(0) if self.callback_statuses else 200)
+
+    def events(self) -> list[dict[str, Any]]:
+        return [json.loads(r.content) for r in self.callbacks]
 
 
 @dataclass
@@ -48,9 +83,11 @@ class Env:
     index: InMemoryIndex
     results: InMemoryResultCache
     workspace_id: uuid.UUID
+    jobs: JobRunner
+    outside: Outside
 
-    def auth(self, workspace_id: uuid.UUID | None = None) -> dict[str, str]:
-        return {"Authorization": f"Bearer {token(workspace_id or self.workspace_id)}"}
+    def auth(self, workspace_id: uuid.UUID | None = None, **claims: object) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token(workspace_id or self.workspace_id, **claims)}"}
 
 
 @pytest.fixture
@@ -63,6 +100,10 @@ async def env() -> AsyncIterator[Env]:
     app.dependency_overrides[library_index] = lambda: index
     app.dependency_overrides[result_cache] = lambda: results
     app.dependency_overrides[vectorizer] = lambda: Vectorizer(embedder, embeddings)
+    outside = Outside()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(outside.handle))
+    jobs = JobRunner(InMemoryJobStore(), JobDeps(get_settings(), http, lambda: llm, results), (0.0, 0.0))
+    app.dependency_overrides[get_job_runner] = lambda: jobs
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://ai") as client:
-        yield Env(client, llm, embedder, index, results, uuid.uuid4())
+        yield Env(client, llm, embedder, index, results, uuid.uuid4(), jobs, outside)

@@ -12,22 +12,30 @@ from api.schemas import (
     DraftAnswersRequest,
     DraftAnswersResponse,
     EntryMetaIn,
+    FinalCheckRequest,
+    FinalCheckResponse,
     IndexResponse,
+    JobAccepted,
+    JobOut,
+    JobSubmission,
     SimilarRequest,
     SimilarResponse,
 )
 from core.config import Settings, get_settings
-from core.errors import RuleViolation
+from core.errors import NotFound, RuleViolation
 from core.security import ServiceContext, service_context
 from llm.ports import LLM, Embedder
 from llm.providers import get_embedder, get_llm
 from services import analyse as analyse_service
-from services import clarification, drafting, library
+from services import clarification, drafting, final_check, library
+from services.jobs import JobRunner, get_job_runner
 from services.vectors import Vectorizer, vectorizer
 from store.ports import LibraryIndex, ResultCache
 from store.postgres import library_index, result_cache
 
 router = APIRouter(prefix="/v1")
+# A final proposal is one document, or a technical and a commercial one.
+MAX_FINAL_FILES = 2
 
 
 def _form_json[M: BaseModel](model: type[M], raw: str) -> M:
@@ -129,3 +137,47 @@ async def client_queries(
 ) -> ClientQueriesResponse:
     """Clarification Agent + Review Agent: questions for the client with the assumption to price on."""
     return await clarification.client_queries(ctx, body, llm, cache, settings)
+
+
+@router.post("/proposals/final-check", response_model=FinalCheckResponse, tags=["proposals"])
+async def check_final_proposal(
+    files: list[UploadFile] = File(
+        ..., description="The final proposal: one file, or technical + commercial."
+    ),
+    request: str = Form(..., description="FinalCheckRequest as JSON (the draft snapshot)."),
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> FinalCheckResponse:
+    """Final Proposal Check Agent: what the uploaded proposal states against the draft, as five findings
+    (Scope, Cost, Timeline, Responses, Attachments). The price is compared only with can_see_restricted."""
+    if not 1 <= len(files) <= MAX_FINAL_FILES:
+        raise RuleViolation("files", f"Send one or {MAX_FINAL_FILES} files.")
+    body = _form_json(FinalCheckRequest, request)
+    content = [(f.filename or "proposal", await _read(f, settings)) for f in files]
+    return await final_check.final_check(ctx, content, body.draft, llm, cache, settings)
+
+
+@router.post("/jobs", status_code=202, response_model=JobAccepted, tags=["jobs"])
+async def submit_job(
+    body: JobSubmission,
+    ctx: ServiceContext = Depends(service_context),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobAccepted:
+    """Accept an asynchronous job (`rfp_analysis`); its progress and result are POSTed, signed, to
+    callback_url. The same idempotency_key in a workspace never starts a second job: it returns the first."""
+    return JobAccepted(job_id=await runner.submit(ctx, body))
+
+
+@router.get("/jobs/{job_id}", response_model=JobOut, tags=["jobs"])
+async def get_job(
+    job_id: str,
+    ctx: ServiceContext = Depends(service_context),
+    runner: JobRunner = Depends(get_job_runner),
+) -> JobOut:
+    """A job's status, for when a callback was missed. Only jobs of the token's workspace."""
+    job = await runner.store.get(ctx.workspace_id, job_id)
+    if job is None:
+        raise NotFound("No such job.")
+    return JobOut(job_id=job.id, type=job.type, status=job.status, error=job.error)  # type: ignore[arg-type]
