@@ -19,11 +19,13 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from api.schemas import JobSubmission, RfpAnalysisInput
+from api.schemas import JobSubmission, RfpAnalysisInput, TemplateExtractInput
 from core.config import Settings, get_settings
 from core.errors import DomainError, RuleViolation
 from core.security import ServiceContext
 from core.signing import SIGNATURE_HEADER, sign
+from documents import template_reader
+from documents.template_reader import TemplateKind
 from llm.ports import LLM
 from llm.providers import get_llm
 from services import analyse as analyse_service
@@ -35,6 +37,7 @@ log = logging.getLogger(__name__)
 
 ERROR_MAX = 2000
 SOMETHING_WENT_WRONG = "Something went wrong while running this job on our side. Please try again."
+NOT_WORD = "The file could not be read as a Word document. Upload it again from Word as .docx."
 DOWNLOAD_FAILED = "We could not download the document (the link may have expired). Please try again."
 # Pauses between delivery attempts of a final event: three tries in all.
 RETRY_DELAYS = (1.0, 4.0)
@@ -88,7 +91,7 @@ class JobHandler:
     run: Callable[[JobRun, Any], Awaitable[tuple[dict[str, Any], dict[str, Any]]]]  # (result, usage)
 
 
-def _allowed_file_url(data: RfpAnalysisInput, settings: Settings) -> None:
+def _allowed_file_url(data: RfpAnalysisInput | TemplateExtractInput, settings: Settings) -> None:
     if not any(data.file_url.startswith(prefix) for prefix in settings.file_url_prefixes):
         raise RuleViolation("file_url", "The file link does not point at the backend's file storage.")
 
@@ -108,8 +111,19 @@ async def _rfp_analysis(run: JobRun, data: RfpAnalysisInput) -> tuple[dict[str, 
     return done.model_dump(), done.meta.usage.model_dump()
 
 
+async def _template_extract(run: JobRun, data: TemplateExtractInput) -> tuple[dict[str, Any], dict[str, Any]]:
+    content = await run.download(data.file_url)
+    try:
+        # A template is read in milliseconds, so on the event loop. No model call, so no usage.
+        spec = template_reader.read_template(content, TemplateKind(data.kind))
+    except template_reader.UnreadableDocument as exc:
+        raise RuleViolation("file", NOT_WORD) from exc
+    return spec, {}
+
+
 HANDLERS: dict[str, JobHandler] = {
     "rfp_analysis": JobHandler(RfpAnalysisInput, _allowed_file_url, _rfp_analysis),
+    "template_extract": JobHandler(TemplateExtractInput, _allowed_file_url, _template_extract),
 }
 
 

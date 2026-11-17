@@ -141,6 +141,14 @@ class RfpAnalysisInput(BaseModel):
     catalogue: list[CatalogueFeature] = Field(min_length=1, max_length=500)
 
 
+class TemplateExtractInput(BaseModel):
+    """Input of the template_extract job: a proposal or case study template (DOCX) to read."""
+
+    file_url: str = Field(min_length=1, max_length=4000, description="Signed link; expires in minutes.")
+    filename: str = Field(min_length=1, max_length=300)
+    kind: Literal["proposal", "case_study"] = "proposal"
+
+
 # ---- Library (indexer + semantic search) -------------------------------------------
 
 

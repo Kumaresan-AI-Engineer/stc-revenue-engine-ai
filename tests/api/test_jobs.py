@@ -2,9 +2,11 @@
 
 import hashlib
 import hmac
+import io
 import uuid
 from typing import Any
 
+import docx
 from conftest import Env
 from fakes import approve_all
 from test_api import CATALOGUE, RFP, _form
@@ -136,3 +138,66 @@ async def test_a_failed_delivery_is_retried_with_the_same_event_id(env: Env) -> 
     await env.jobs.drain()
     finals = [e for e in env.outside.events() if e["status"] == "succeeded"]
     assert len(finals) == 3 and len({e["event_id"] for e in finals}) == 1
+
+
+def _template_docx() -> bytes:
+    document = docx.Document()
+    document.add_paragraph("Proposal for [Project]", style="Title")
+    document.add_paragraph("Prepared for: [Client]")
+    for title, text in (
+        ("Executive Summary", "Lead with the outcome."),
+        ("Commercials", "Price by phase."),
+        ("About Us", "We have delivered 300 projects."),
+    ):
+        document.add_heading(title, level=1)
+        document.add_paragraph(text)
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
+
+
+def _template_job(kind: str = "proposal") -> dict[str, Any]:
+    return _submission(
+        "template-1",
+        type="template_extract",
+        input={"file_url": FILE_URL, "filename": "template.docx", "kind": kind},
+    )
+
+
+async def test_a_template_is_read_into_its_sections_without_the_model(env: Env) -> None:
+    env.outside.files[FILE_URL] = _template_docx()
+    r = await env.client.post("/v1/jobs", json=_template_job(), headers=env.auth())
+    assert r.status_code == 202, r.text
+    await env.jobs.drain()
+
+    done = env.outside.events()[-1]
+    assert done["status"] == "succeeded" and done["type"] == "template_extract"
+    spec = done["result"]
+    assert [(s["key"], s["kind"]) for s in spec["sections"]] == [
+        ("summary", "generated"),
+        ("commercials", "generated"),
+        ("custom", "boilerplate"),
+    ]
+    assert spec["sections"][0]["guidance"] == "Lead with the outcome."
+    assert spec["sections"][2]["fixed_text"] == "<p>We have delivered 300 projects.</p>"
+    assert [f["key"] for f in spec["cover"]["fields"]] == ["title", "client"]
+    assert spec["page"]["size"] == "Letter"  # python-docx's default page
+    assert env.llm.calls == []
+
+
+async def test_a_case_study_template_keeps_every_section_as_its_own(env: Env) -> None:
+    env.outside.files[FILE_URL] = _template_docx()
+    await env.client.post("/v1/jobs", json=_template_job("case_study"), headers=env.auth())
+    await env.jobs.drain()
+    spec = env.outside.events()[-1]["result"]
+    assert {s["key"] for s in spec["sections"]} == {"custom"}
+    # "Executive Summary" names a part of a case study; the others are the same text in every one.
+    assert [s["kind"] for s in spec["sections"]] == ["generated", "boilerplate", "boilerplate"]
+
+
+async def test_a_template_that_is_not_word_fails_with_its_reason(env: Env) -> None:
+    env.outside.files[FILE_URL] = b"%PDF-1.7 not a word document"
+    await env.client.post("/v1/jobs", json=_template_job(), headers=env.auth())
+    await env.jobs.drain()
+    done = env.outside.events()[-1]
+    assert done["status"] == "failed" and "could not be read as a Word document" in done["error"]
