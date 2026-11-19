@@ -37,6 +37,15 @@ _PRICING_QUESTION = re.compile(
     r"quote|quotation|commercial offer|payment terms)\b",
     re.IGNORECASE,
 )
+# A money word within a few words of a number, either way round ("the price is 40,000", "40k fee"), or a
+# rupee amount written "Rs. 500".
+_PRICE_NEAR_NUMBER = re.compile(
+    r"\b(?:price[sd]?|pricing|costs?|costing|fees?|budget|rates?\s+card|day\s+rate|hourly\s+rate)\b"
+    r"(?:\W+\w+){0,3}?\W+\d"
+    r"|\d[\d,.]*\s*(?:k|m|bn)?(?:\s+\w+){0,2}?\s+(?:price[sd]?|costs?|fees?|budget)\b"
+    r"|\brs\.?\s?\d",
+    re.IGNORECASE,
+)
 AMOUNT_PLACEHOLDER = "[amount]"
 
 
@@ -62,6 +71,12 @@ def contains_quote(source: str, quote: str) -> bool:
 
 def mentions_amount(text: str) -> bool:
     return bool(_AMOUNT.search(text))
+
+
+def mentions_money(text: str) -> bool:
+    """Stricter than mentions_amount, for text the AI writes itself: also a price, cost or fee word next to a
+    number. A paragraph that says "it costs 20 days" is dropped too; the AI never writes money."""
+    return mentions_amount(text) or bool(_PRICE_NEAR_NUMBER.search(text))
 
 
 def redact_amounts(text: str) -> str:

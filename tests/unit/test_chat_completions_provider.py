@@ -184,3 +184,20 @@ async def test_provider_errors_become_upstream_errors() -> None:
     llm, _ = _llm([openai.APIConnectionError(request=request)])
     with pytest.raises(UpstreamError):
         await llm.structured(CALL)
+
+
+async def test_images_go_as_image_url_parts_of_the_user_message() -> None:
+    llm, stub = _llm([_reply('{"text": "seen"}')])
+    call = AgentCall(
+        "template_vision", "Read it.", "Pages follow.", Answer, "low", ("data:image/png;base64,AA",)
+    )
+    done = await llm.structured(call)
+    assert done.value.text == "seen"
+    user = stub.requests[0]["messages"][1]
+    assert user == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Pages follow."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+        ],
+    }

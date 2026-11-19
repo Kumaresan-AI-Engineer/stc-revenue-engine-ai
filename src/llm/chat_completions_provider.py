@@ -42,6 +42,14 @@ def _system(call: AgentCall[Any]) -> str:
     )
 
 
+def _user_content(call: AgentCall[Any]) -> str | list[dict[str, Any]]:
+    """The input as text, or as text and image parts when the call carries images."""
+    if not call.images:
+        return call.input
+    images = [{"type": "image_url", "image_url": {"url": url}} for url in call.images]
+    return [{"type": "text", "text": call.input}, *images]
+
+
 def _json_text(content: str) -> str:
     """The JSON object in a reply, without code fences or text around it."""
     start, end = content.find("{"), content.rfind("}")
@@ -113,7 +121,10 @@ class ChatCompletionsLLM:
         raise UpstreamError(f"The AI provider returned no usable answer for {call.agent}.")
 
     async def structured[T: BaseModel](self, call: AgentCall[T]) -> Completion[T]:
-        messages = [{"role": "system", "content": _system(call)}, {"role": "user", "content": call.input}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _system(call)},
+            {"role": "user", "content": _user_content(call)},
+        ]
         options: dict[str, Any] = {"response_format": {"type": "json_object"}}
         if call.effort:
             options["reasoning_effort"] = call.effort

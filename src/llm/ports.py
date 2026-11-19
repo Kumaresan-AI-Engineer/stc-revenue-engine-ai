@@ -27,6 +27,9 @@ class AgentCall[T: BaseModel]:
     input: str
     output: type[T]
     effort: ReasoningEffort | None
+    # Images the model looks at with the input, as data URLs (data:image/png;base64,...). Structured calls
+    # only; a vision-capable model is needed.
+    images: tuple[str, ...] = ()
 
 
 @dataclass

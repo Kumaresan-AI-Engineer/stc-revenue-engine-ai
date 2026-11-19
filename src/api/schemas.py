@@ -1,12 +1,13 @@
 """The backend ↔ AI service contract (v1). The backend regenerates its client models from
 /openapi.json, so every request and response is typed here."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agents.clarification import ClientQuestion
 from agents.extraction import CatalogueFeature
+from agents.sizing import SizeClass
 from rules.matching import DEFAULT_MATCH_THRESHOLD
 
 Id = Field(min_length=1, max_length=64)
@@ -336,4 +337,153 @@ class FinalCheckResponse(BaseModel):
     draft_price: int | None
     draft_weeks: int | None
     findings: list[FindingOut] = Field(description="Exactly Scope, Cost, Timeline, Responses, Attachments.")
+    meta: Meta
+
+
+def _unique(values: list[str], what: str) -> None:
+    if len(set(values)) != len(values):
+        raise ValueError(f"Each {what} must be unique.")
+
+
+# ---- Write sections (Section Writer Agent) -------------------------------------------
+
+
+class SectionToWrite(BaseModel):
+    key: str = Id
+    title: str = Field(min_length=1, max_length=200)
+    guidance: str = Field("", max_length=2000, description="How the template says to write it.")
+
+
+class ClarificationFact(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    answer: str = Field("", max_length=2000)
+
+
+class ExperienceFact(BaseModel):
+    client: str = Field(max_length=200)
+    title: str = Field(max_length=300)
+    year: int = Field(ge=1990, le=2100)
+    outcome: str = Field("", max_length=1000)
+
+
+class ProposalFacts(BaseModel):
+    """Everything the writer may say. A fact left empty is written as "[to be completed]"."""
+
+    client: str = Field("", max_length=200)
+    title: str = Field("", max_length=300)
+    summary: str = Field("", max_length=4000)
+    industry: str = Field("", max_length=100)
+    engagement_model: str = Field("", max_length=60)
+    delivery_approach: str = Field("", max_length=2000)
+    requirements: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=200)
+    standard_features: list[Annotated[str, Field(max_length=300)]] = Field(
+        default_factory=list, max_length=200
+    )
+    modules: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=100)
+    timeline_weeks: int | None = Field(None, ge=0, le=520)
+    team_size: int | None = Field(None, ge=0, le=1000)
+    assumptions: list[Annotated[str, Field(max_length=1000)]] = Field(default_factory=list, max_length=100)
+    clarifications: list[ClarificationFact] = Field(default_factory=list, max_length=100)
+    experience: list[ExperienceFact] = Field(default_factory=list, max_length=20)
+
+
+class WriteSectionsRequest(BaseModel):
+    sections: list[SectionToWrite] = Field(min_length=1, max_length=30)
+    facts: ProposalFacts
+
+    @model_validator(mode="after")
+    def _keys_are_unique(self) -> "WriteSectionsRequest":
+        _unique([s.key for s in self.sections], "section key")
+        return self
+
+
+class WrittenSectionOut(BaseModel):
+    key: str
+    paragraphs: list[str] = Field(description="1 to 5 plain-text paragraphs, each at most 1200 characters.")
+
+
+class WriteSectionsResponse(BaseModel):
+    sections: list[WrittenSectionOut] = Field(description="One per requested section, in the same order.")
+    dropped: list[str] = Field(description="Paragraphs removed by the checks (e.g. a money amount).")
+    meta: Meta
+
+
+# ---- Assume answers (Assumption Agent) -----------------------------------------------
+
+
+class OpenQuestion(BaseModel):
+    id: str = Id
+    question: str = Field(min_length=1, max_length=2000)
+    category: str = Field("", max_length=40)
+    why: str = Field("", max_length=1000)
+
+
+class AssumeAnswersRequest(BaseModel):
+    rfp_summary: str = Field("", max_length=4000)
+    engagement_model: str = Field("", max_length=60)
+    requirements: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=200)
+    questions: list[OpenQuestion] = Field(min_length=1, max_length=60)
+
+    @model_validator(mode="after")
+    def _ids_are_unique(self) -> "AssumeAnswersRequest":
+        _unique([q.id for q in self.questions], "question id")
+        return self
+
+
+class AssumptionOut(BaseModel):
+    id: str
+    assumption: str = Field(description="What we estimate on, stated as a fact (at most 400 characters).")
+    risk: str = Field(description="What changes if the assumption is wrong (at most 300 characters).")
+
+
+class AssumeAnswersResponse(BaseModel):
+    assumptions: list[AssumptionOut] = Field(description="Exactly one per question, in the same order.")
+    meta: Meta
+
+
+# ---- Check an answer (Answer Check Agent) --------------------------------------------
+
+
+class CheckAnswerRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    why: str = Field("", max_length=1000)
+    category: str = Field("", max_length=40)
+    answer: str = Field("", max_length=4000)
+
+
+class CheckAnswerResponse(BaseModel):
+    acceptable: bool
+    reason: str = Field(description="One sentence for the user when not acceptable; empty when acceptable.")
+    suggestion: str = Field(description="A short example of a good answer.")
+    meta: Meta
+
+
+# ---- Size requirements (Sizing Agent) ------------------------------------------------
+
+
+class RequirementToSize(BaseModel):
+    key: str = Id
+    label: str = Field(min_length=1, max_length=300)
+    detail: str = Field("", max_length=2000)
+
+
+class SizeRequirementsRequest(BaseModel):
+    industry: str = Field("", max_length=100)
+    requirements: list[RequirementToSize] = Field(min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def _keys_are_unique(self) -> "SizeRequirementsRequest":
+        _unique([r.key for r in self.requirements], "requirement key")
+        return self
+
+
+class SizeOut(BaseModel):
+    key: str
+    size: SizeClass
+    days: int = Field(description="Build person-days for the size class (set by code, not the model).")
+    rationale: str
+
+
+class SizeRequirementsResponse(BaseModel):
+    sizes: list[SizeOut] = Field(description="Exactly one per requirement, in the same order.")
     meta: Meta

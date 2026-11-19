@@ -150,3 +150,20 @@ async def test_provider_errors_and_empty_answers_become_upstream_errors() -> Non
         await llm.structured(CALL)
     with pytest.raises(UpstreamError):
         await llm.structured(CALL)
+
+
+async def test_images_go_with_the_text_in_one_user_message() -> None:
+    llm, stub = _llm([_response([], Answer(text="seen"))])
+    call = AgentCall(
+        "template_vision", "Read it.", "Pages follow.", Answer, "low", ("data:image/png;base64,AA",)
+    )
+    await llm.structured(call)
+    assert stub.requests[0]["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Pages follow."},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA"},
+            ],
+        }
+    ]

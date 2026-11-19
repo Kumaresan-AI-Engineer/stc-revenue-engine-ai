@@ -7,6 +7,10 @@ from pydantic import BaseModel, ValidationError
 from api.schemas import (
     AnalyseRequest,
     AnalyseResponse,
+    AssumeAnswersRequest,
+    AssumeAnswersResponse,
+    CheckAnswerRequest,
+    CheckAnswerResponse,
     ClientQueriesRequest,
     ClientQueriesResponse,
     DraftAnswersRequest,
@@ -20,6 +24,10 @@ from api.schemas import (
     JobSubmission,
     SimilarRequest,
     SimilarResponse,
+    SizeRequirementsRequest,
+    SizeRequirementsResponse,
+    WriteSectionsRequest,
+    WriteSectionsResponse,
 )
 from core.config import Settings, get_settings
 from core.errors import NotFound, RuleViolation
@@ -27,7 +35,16 @@ from core.security import ServiceContext, service_context
 from llm.ports import LLM, Embedder
 from llm.providers import get_embedder, get_llm
 from services import analyse as analyse_service
-from services import clarification, drafting, final_check, library
+from services import (
+    answer_check,
+    assumptions,
+    clarification,
+    drafting,
+    final_check,
+    library,
+    proposal_writing,
+    sizing,
+)
 from services.jobs import JobRunner, get_job_runner
 from services.vectors import Vectorizer, vectorizer
 from store.ports import LibraryIndex, ResultCache
@@ -139,6 +156,56 @@ async def client_queries(
     return await clarification.client_queries(ctx, body, llm, cache, settings)
 
 
+@router.post("/proposals/write-sections", response_model=WriteSectionsResponse, tags=["proposals"])
+async def write_sections(
+    body: WriteSectionsRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> WriteSectionsResponse:
+    """Section Writer Agent: each section written from the facts only, following its template guidance, as
+    plain paragraphs. A missing fact reads "[to be completed]"; a paragraph with money in it is dropped."""
+    return await proposal_writing.write_sections(ctx, body, llm, cache, settings)
+
+
+@router.post("/proposals/clarifications/assume", response_model=AssumeAnswersResponse, tags=["proposals"])
+async def assume_answers(
+    body: AssumeAnswersRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> AssumeAnswersResponse:
+    """Assumption Agent: one conservative assumption to estimate on, with its risk, per open question."""
+    return await assumptions.assume_answers(ctx, body, llm, cache, settings)
+
+
+@router.post("/proposals/clarifications/check-answer", response_model=CheckAnswerResponse, tags=["proposals"])
+async def check_answer(
+    body: CheckAnswerRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> CheckAnswerResponse:
+    """Answer Check Agent: whether a typed answer answers its question, with a reason and an example."""
+    return await answer_check.check_answer(ctx, body, llm, cache, settings)
+
+
+@router.post("/proposals/size-requirements", response_model=SizeRequirementsResponse, tags=["proposals"])
+async def size_requirements(
+    body: SizeRequirementsRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> SizeRequirementsResponse:
+    """Sizing Agent: a size class (XS-XL) per requirement by industry benchmarks; the person-days per class
+    are fixed in code (XS 5, S 10, M 20, L 40, XL 80)."""
+    return await sizing.size_requirements(ctx, body, llm, cache, settings)
+
+
 @router.post("/proposals/final-check", response_model=FinalCheckResponse, tags=["proposals"])
 async def check_final_proposal(
     files: list[UploadFile] = File(
@@ -165,8 +232,9 @@ async def submit_job(
     ctx: ServiceContext = Depends(service_context),
     runner: JobRunner = Depends(get_job_runner),
 ) -> JobAccepted:
-    """Accept an asynchronous job (`rfp_analysis`); its progress and result are POSTed, signed, to
-    callback_url. The same idempotency_key in a workspace never starts a second job: it returns the first."""
+    """Accept an asynchronous job (`rfp_analysis`, `template_extract`); its progress and result are POSTed,
+    signed, to callback_url. The same idempotency_key in a workspace never starts a second job: it returns
+    the first."""
     return JobAccepted(job_id=await runner.submit(ctx, body))
 
 

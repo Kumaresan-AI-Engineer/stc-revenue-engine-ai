@@ -21,6 +21,14 @@ def _usage(response: Any, tool_calls: int = 0) -> Usage:
     return Usage(u.input_tokens if u else 0, u.output_tokens if u else 0, 1, tool_calls)
 
 
+def _input(call: AgentCall[Any]) -> str | list[dict[str, Any]]:
+    """The input as text, or as one user message of text and image parts when the call carries images."""
+    if not call.images:
+        return call.input
+    images = [{"type": "input_image", "image_url": url} for url in call.images]
+    return [{"role": "user", "content": [{"type": "input_text", "text": call.input}, *images]}]
+
+
 class OpenAILLM:
     def __init__(self, client: AsyncOpenAI, settings: Settings) -> None:
         self._client = client
@@ -64,7 +72,7 @@ class OpenAILLM:
         return parsed  # type: ignore[no-any-return]
 
     async def structured[T: BaseModel](self, call: AgentCall[T]) -> Completion[T]:
-        response = await self._parse(call, input=call.input)
+        response = await self._parse(call, input=_input(call))
         return Completion(self._value(response, call), _usage(response))
 
     async def with_tools[T: BaseModel](

@@ -11,7 +11,7 @@ database, embedded by default: a local folder, no server) · PostgreSQL 16 (entr
 
 ## The agents
 
-Four agents with one job each, run in a fixed order by code (no AI decides what runs next).
+Agents with one job each, run in a fixed order by code (no AI decides what runs next).
 
 | Step | Agent | What it does | Checked by |
 |---|---|---|---|
@@ -19,9 +19,14 @@ Four agents with one job each, run in a fixed order by code (no AI decides what 
 | 3 Matches | *Semantic search* (no LLM) | Past proposals covering each requirement (incl. custom ones), and similar projects | fixed threshold and order |
 | 4 Responses | **Response Drafting** (tools) | Searches only the selected past proposals, never lost ones, won first (`search_library`, `get_passage`, ≤ 5 calls) and drafts an answer whose every claim quotes a passage it read; returns `citations`, `confidence` (0.9 first try, 0.7 after a correction) and `no_confident_source` | code: passage was read, quote is in it, no amounts · Review Agent |
 | 5 Queries | **Clarification** | Questions for the client: why we ask, a sample answer, the assumption we price on; at most `limit` (Suggest with AI: 3) | code: topic id, no amounts, no (near-)repeat of an existing question or assumption · Review Agent |
+| 5 Queries | **Assumption** | One conservative assumption per open question (`assumption` ≤ 400 chars, stated as a fact) with its `risk` (≤ 300) | code: exactly one per question id, unknown ids dropped, no amounts; one retry for missing ids, then a generic conservative assumption |
+| 5 Queries | **Answer Check** | Does a typed answer actually answer its question? `acceptable`, a one-sentence `reason`, a `suggestion` | code pre-check without the model: no words, digits only (unless the question asks for a number), a single word |
+| 6 Estimate | **Sizing** | A size class per requirement (XS–XL) by industry-standard delivery benchmarks, with a rationale | code: person-days per class (XS 5, S 10, M 20, L 40, XL 80); a requirement not sized gets M |
+| 7 Proposal | **Section Writer** | Writes each section from the facts only, following its template guidance; a missing fact reads `[to be completed]` | code: plain text (markup removed), 1–5 paragraphs ≤ 1200 chars, any paragraph with money dropped (`dropped`); one retry for empty sections |
+| Setup | **Template Analysis** (job `template_extract`) | Reviews the sections the reader found in a DOCX template: section key, generated or boilerplate, and writing guidance in the template's voice. A template with < 2 headings but pictures: the headings are read from up to 4 pictures (vision) | code: merged onto the reader's result (keys valid and unique, titles, order and fixed text stay the document's, guidance without money); the model failing leaves the reader's result with a warning |
 | 8 Submit | **Final Proposal Check** | Reads the user's own final proposal (1–2 files): price (only with `can_see_restricted`), weeks, core features delivered, answers matching the approved responses, attachments referenced | code: every fact's quote is in the file, a figure's number is in its quote; the five findings are written by code |
 | all | **Review** | Independent second look: is the statement fully supported by its evidence and the rule? Missing verdict = fail | — |
-| 6 Estimate | — | Never AI. Stays in the backend's `estimate.py`. | — |
+| 6 Estimate | — | Prices never AI. The estimate stays in the backend's `estimate.py`; Sizing only suggests person-days. | — |
 
 Background: the **Library indexer** splits each past proposal into passages, removes amounts, embeds them and
 stores them per workspace.
@@ -41,7 +46,8 @@ anything still failing is dropped or marked `needs_person`**. Nothing is guessed
 - **Free embeddings:** fastembed runs `BAAI/bge-small-en-v1.5` on CPU (384 dimensions); the model is downloaded once
   (baked into the Docker image). The match threshold (0.75) is a starting point to tune on the evaluation set.
 - **No prices:** amounts are removed from indexed passages; pricing questions are never drafted; any amount in an
-  answer or client question fails the check.
+  answer or client question fails the check; written sections, assumptions, answer checks, size rationales and
+  template guidance drop any text with a currency amount or a price/cost/fee word next to a number.
 
 ## Endpoints (`/v1`, service JWT required)
 
@@ -54,7 +60,11 @@ anything still failing is dropped or marked `needs_person`**. Nothing is guessed
 | `POST /proposals/draft-answers` | questions + selected entry ids → `drafted` / `needs_person` / `skipped_pricing` / `skipped` |
 | `POST /proposals/client-queries` | requirements (covered or not) + unclear points + existing questions and assumptions + `limit` → client questions |
 | `POST /proposals/final-check` | multipart: `files` (1–2) + `request` = `{"draft": {price, weeks, core_features, responses, attachments, ...}}` → `findings` for Scope, Cost, Timeline, Responses, Attachments (in that order) |
-| `POST /jobs` | `{type, input, callback_url, idempotency_key, priority}` → `202 {job_id}`; type `rfp_analysis` |
+| `POST /proposals/write-sections` | JWT `purpose` `write_sections`. `{sections: [{key, title, guidance}] (1–30, unique keys), facts: {client, title, summary, industry, engagement_model, delivery_approach, requirements, standard_features, modules, timeline_weeks, team_size, assumptions, clarifications: [{question, answer}], experience: [{client, title, year, outcome}]}}` → `{sections: [{key, paragraphs}], dropped, meta}` |
+| `POST /proposals/clarifications/assume` | JWT `purpose` `assume_answers`. `{rfp_summary, engagement_model, requirements, questions: [{id, question, category, why}] (1–60, unique ids)}` → `{assumptions: [{id, assumption, risk}], meta}`, one per question in its order |
+| `POST /proposals/clarifications/check-answer` | JWT `purpose` `check_answer`. `{question, why, category, answer}` → `{acceptable, reason, suggestion, meta}` |
+| `POST /proposals/size-requirements` | JWT `purpose` `size_requirements`. `{industry, requirements: [{key, label, detail}] (1–80, unique keys)}` → `{sizes: [{key, size, days, rationale}], meta}`, one per requirement in its order |
+| `POST /jobs` | `{type, input, callback_url, idempotency_key, priority}` → `202 {job_id}`; types `rfp_analysis`, `template_extract` |
 | `GET /jobs/{job_id}` | the job's status (`queued`, `running`, `succeeded`, `failed`) and error, in the token's workspace |
 | `GET /healthz` | liveness |
 
@@ -86,6 +96,14 @@ page}]`, `due_date`, `start_date`, `budget_hint`, `client`, `questions: [{text, 
 `required_documents: [name]`, `documents: [{name, evidence, page}]`, `unclear_points`, `rejected`, `ocr`, `pages`,
 `meta`.
 
+**`template_extract`** input: `{file_url, filename, kind: "proposal" | "case_study"}`. Result: the backend's
+`TemplateSpec` (`branding`, `page`, `header`, `footer`, `cover`, `sections: [{key, title, order, kind, fixed_text?,
+guidance}]`, `confidence`, `warnings`). The DOCX is read by code first (headings, styles, page, cover); a template
+with fewer than 2 headings but embedded pictures (`word/media`: PNG, JPEG, GIF, WebP) has its headings read from up
+to 4 of them by a vision call (images sent as data URLs); then the Template Analysis Agent reviews every section and
+code merges its advice. A model failure never fails the job: the code's reading is returned with a warning.
+`usage` counts the model calls.
+
 **OCR:** PDF pages without a text layer are rendered with pdfium and read with RapidOCR (ONNX on CPU, local), at
 most `RE_AI_OCR_MAX_PAGES` (100) per document; the result says `ocr: true`. A file with no readable text at all
 fails with "has no readable text".
@@ -114,6 +132,6 @@ by an `rfp_analysis` job. Set the same `RE_AI_SERVICE_TOKEN_SECRET` and `RE_AI_C
 ## Not done yet
 
 - **Evaluation set:** 10–20 past RFPs with known answers to tune the match threshold and gate prompt changes.
-- Other job types of ARCHITECTURE §10 (`template_extract`, `bulk_draft`, `ingest_file`, ...): only `rfp_analysis`
-  runs as a job; `priority` is accepted but not used yet; a job lost by a restart is not resumed.
+- Other job types of ARCHITECTURE §10 (`bulk_draft`, `ingest_file`, ...): only `rfp_analysis` and
+  `template_extract` run as jobs; `priority` is accepted but not used yet; a job lost by a restart is not resumed.
 - RS256 service tokens against the backend's JWKS; Batch API for bulk library imports.

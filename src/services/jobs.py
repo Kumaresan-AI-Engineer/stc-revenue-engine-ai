@@ -12,7 +12,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -29,6 +29,7 @@ from documents.template_reader import TemplateKind
 from llm.ports import LLM
 from llm.providers import get_llm
 from services import analyse as analyse_service
+from services import templates
 from store.jobs import FAILED, SUCCEEDED, Job, JobStore, pg_job_store
 from store.ports import ResultCache
 from store.postgres import pg_standalone_result_cache
@@ -114,11 +115,12 @@ async def _rfp_analysis(run: JobRun, data: RfpAnalysisInput) -> tuple[dict[str, 
 async def _template_extract(run: JobRun, data: TemplateExtractInput) -> tuple[dict[str, Any], dict[str, Any]]:
     content = await run.download(data.file_url)
     try:
-        # A template is read in milliseconds, so on the event loop. No model call, so no usage.
-        spec = template_reader.read_template(content, TemplateKind(data.kind))
+        spec, usage = await templates.extract(
+            content, TemplateKind(data.kind), run.deps.llm, run.deps.settings
+        )
     except template_reader.UnreadableDocument as exc:
         raise RuleViolation("file", NOT_WORD) from exc
-    return spec, {}
+    return spec, asdict(usage)
 
 
 HANDLERS: dict[str, JobHandler] = {

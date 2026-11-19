@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     review_effort: ReasoningEffort | None = "medium"
     # Reading an uploaded final proposal against the draft: a fact-finding task, kept fast (< 30 s).
     final_check_effort: ReasoningEffort | None = "low"
+    # Reading a template's sections (and, for a template without headings, its images) once per upload.
+    template_analysis_effort: ReasoningEffort | None = "low"
+    # Writing the proposal's sections from the facts: the longest output, in the template's voice.
+    section_writer_effort: ReasoningEffort | None = "medium"
+    # Assumed answers and effort sizes: short, conservative picks.
+    assumption_effort: ReasoningEffort | None = "low"
+    sizing_effort: ReasoningEffort | None = "low"
+    # Checking one typed answer while the user waits: kept as fast as possible.
+    answer_check_effort: ReasoningEffort | None = "low"
     # Only sent when set, and only accepted by non-reasoning models (e.g. gpt-4.1).
     temperature: float | None = Field(default=None, ge=0, le=2)
     request_timeout_s: float = 120.0

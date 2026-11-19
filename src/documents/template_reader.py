@@ -8,11 +8,14 @@ apply_extraction) and an admin reviews it before it is used. The document's text
 never interpreted.
 
 Kept in step with the backend's local reader (stc-revenue-engine-api modules/docgen/mock_ai.py).
+The template_extract job then has the model review this reading (services/templates.py).
 """
 
 import html
 import io
+import posixpath
 import re
+import zipfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -165,6 +168,16 @@ _ALIGN = {WD_ALIGN_PARAGRAPH.CENTER: "center", WD_ALIGN_PARAGRAPH.RIGHT: "right"
 _PAPER = (("A4", 210.0, 297.0), ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6))
 _PAPER_TOLERANCE_MM = 2.0
 _DRAWING = "./w:r//w:drawing | ./w:r//w:pict"
+_MEDIA = "word/media/"
+_IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+# A picture larger than this is not sent to the model (a page scan is far smaller).
+_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 
 class UnreadableDocument(Exception):
@@ -187,12 +200,40 @@ def read_template(data: bytes, kind: TemplateKind = TemplateKind.PROPOSAL) -> di
         raise UnreadableDocument from exc
 
 
+def heading_count(data: bytes) -> int:
+    """How many sections the document's headings give (0 when it has none). Raises UnreadableDocument."""
+    try:
+        paragraphs = list(docx.Document(io.BytesIO(data)).paragraphs)
+    except Exception as exc:  # the same as read_template: a file that cannot be parsed cannot be read
+        raise UnreadableDocument from exc
+    return len(_split(paragraphs, _section_level(paragraphs))[1])
+
+
+def embedded_images(data: bytes, limit: int) -> list[tuple[str, bytes]]:
+    """Up to `limit` pictures stored in the document (word/media), in file order, as (MIME type, bytes).
+    Only types a vision model reads; vector formats such as EMF are skipped."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = sorted(n for n in archive.namelist() if n.startswith(_MEDIA))
+            found = []
+            for name in names:
+                mime = _IMAGE_TYPES.get(posixpath.splitext(name)[1].lower())
+                info = archive.getinfo(name)
+                if mime and 0 < info.file_size <= _IMAGE_MAX_BYTES:
+                    found.append((mime, archive.read(name)))
+                if len(found) == limit:
+                    break
+            return found
+    except zipfile.BadZipFile as exc:
+        raise UnreadableDocument from exc
+
+
 def _extract(document: Document, kind: TemplateKind) -> dict[str, Any]:
     paragraphs = list(document.paragraphs)
     level = _section_level(paragraphs)
     cover_part, headings = _split(paragraphs, level)
     warnings = [REVIEW_WARNING]
-    reader = _READERS[kind]
+    reader = READERS[kind]
     sections = reader.sections(headings)
     if sections:
         recognised = sum(1 for s in sections if reader.recognised(s))
@@ -279,7 +320,7 @@ def _sections(headings: list[_Heading]) -> list[dict[str, Any]]:
         section: dict[str, Any] = {"key": key.value, "title": heading.title[:200], "order": order}
         if key == SectionKey.CUSTOM and body:
             # A section of its own with text already written: the same in every proposal.
-            section |= {"kind": "boilerplate", "fixed_text": _paragraphs_html(heading.body), "guidance": ""}
+            section |= {"kind": "boilerplate", "fixed_text": paragraphs_html(heading.body), "guidance": ""}
         else:
             section |= {"kind": "generated", "guidance": body[:_GUIDANCE_MAX]}
         out.append(section)
@@ -297,7 +338,7 @@ def _case_study_sections(headings: list[_Heading]) -> list[dict[str, Any]]:
             "order": order,
         }
         if heading.body and not _names_case_study_part(heading.title):
-            section |= {"kind": "boilerplate", "fixed_text": _paragraphs_html(heading.body), "guidance": ""}
+            section |= {"kind": "boilerplate", "fixed_text": paragraphs_html(heading.body), "guidance": ""}
         else:
             section |= {"kind": "generated", "guidance": "\n".join(heading.body)[:_GUIDANCE_MAX]}
         out.append(section)
@@ -319,7 +360,7 @@ class _Reader:
     fallback_warning: str
 
 
-_READERS: dict[TemplateKind, _Reader] = {
+READERS: dict[TemplateKind, _Reader] = {
     TemplateKind.PROPOSAL: _Reader(
         sections=_sections,
         recognised=lambda section: section["key"] != SectionKey.CUSTOM,
@@ -335,7 +376,8 @@ _READERS: dict[TemplateKind, _Reader] = {
 }
 
 
-def _paragraphs_html(lines: Iterable[str]) -> str:
+def paragraphs_html(lines: Iterable[str]) -> str:
+    """Lines of the document's text as escaped HTML paragraphs, within the fixed text's size."""
     out, size = [], 0
     for line in lines:
         block = f"<p>{html.escape(line)}</p>"
