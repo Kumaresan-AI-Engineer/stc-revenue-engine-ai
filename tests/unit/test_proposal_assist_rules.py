@@ -211,3 +211,22 @@ def test_the_reader_counts_headings_and_finds_embedded_pictures() -> None:
         template_reader.embedded_images(b"not a zip", limit=4)
     with pytest.raises(template_reader.UnreadableDocument):
         template_reader.heading_count(b"not a zip")
+
+
+def test_the_reader_takes_decimal_page_sizes_and_margins() -> None:
+    """Google Docs and LibreOffice write twips as decimals, which python-docx refuses: such a file failed as
+    'not a Word document'."""
+    document = docx.Document()
+    document.add_heading("Executive summary", level=1)
+    sect = document.sections[0]._sectPr
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    size, margins = sect.find(f"{ns}pgSz"), sect.find(f"{ns}pgMar")
+    size.set(f"{ns}w", "11905.511811023624")
+    size.set(f"{ns}h", "16837.79527559055")
+    size.set(f"{ns}orient", "landscape")
+    margins.set(f"{ns}right", "1133.857421875")
+    out = io.BytesIO()
+    document.save(out)
+    page = template_reader.read_template(out.getvalue(), TemplateKind.PROPOSAL)["page"]
+    assert (page["size"], page["width_mm"], page["height_mm"]) == ("A4", 210.0, 297.0)
+    assert page["orientation"] == "landscape" and page["margins_mm"]["right"] == 20.0

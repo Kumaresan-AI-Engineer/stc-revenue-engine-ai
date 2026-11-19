@@ -23,10 +23,8 @@ from typing import Any
 
 import docx
 from docx.document import Document
-from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.section import Section, _Footer, _Header
-from docx.shared import Length
 from docx.styles.style import ParagraphStyle
 from docx.text.paragraph import Paragraph
 
@@ -438,12 +436,21 @@ def _logo(first: Section, cover: list[Paragraph]) -> dict[str, str] | None:
     return None
 
 
-def _mm(length: Length | None, default: float) -> float:
-    return round(length.mm, 1) if length is not None else default
+_TWIPS_PER_MM = 1440 / 25.4
+
+
+def _mm(section: Section, part: str, side: str, default: float) -> float:
+    """A page size or margin in mm, read from the raw twips: Google Docs and LibreOffice write decimals
+    ("1133.857421875"), which python-docx refuses."""
+    value = section._sectPr.xpath(f"./w:{part}/@w:{side}")
+    try:
+        return round(float(value[0]) / _TWIPS_PER_MM, 1) if value else default
+    except ValueError:
+        return default
 
 
 def _page(first: Section) -> dict[str, Any]:
-    width, height = _mm(first.page_width, 210.0), _mm(first.page_height, 297.0)
+    width, height = _mm(first, "pgSz", "w", 210.0), _mm(first, "pgSz", "h", 297.0)
     short, long_ = sorted((width, height))
     size = next(
         (
@@ -453,17 +460,17 @@ def _page(first: Section) -> dict[str, Any]:
         ),
         "custom",
     )
-    landscape = first.orientation == WD_ORIENT.LANDSCAPE or width > height
+    landscape = first._sectPr.xpath("./w:pgSz/@w:orient") == ["landscape"] or width > height
     return {
         "size": size,
         "orientation": "landscape" if landscape else "portrait",
         "width_mm": width,
         "height_mm": height,
         "margins_mm": {
-            "top": _mm(first.top_margin, 25.4),
-            "right": _mm(first.right_margin, 25.4),
-            "bottom": _mm(first.bottom_margin, 25.4),
-            "left": _mm(first.left_margin, 25.4),
+            "top": _mm(first, "pgMar", "top", 25.4),
+            "right": _mm(first, "pgMar", "right", 25.4),
+            "bottom": _mm(first, "pgMar", "bottom", 25.4),
+            "left": _mm(first, "pgMar", "left", 25.4),
         },
     }
 
