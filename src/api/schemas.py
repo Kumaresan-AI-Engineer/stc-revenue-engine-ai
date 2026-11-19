@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agents.clarification import ClientQuestion
+from agents.estimate_assistant import ActionKind as EstimateActionKind
 from agents.extraction import CatalogueFeature
 from agents.sizing import SizeClass
 from rules.matching import DEFAULT_MATCH_THRESHOLD
@@ -486,4 +487,144 @@ class SizeOut(BaseModel):
 
 class SizeRequirementsResponse(BaseModel):
     sizes: list[SizeOut] = Field(description="Exactly one per requirement, in the same order.")
+    meta: Meta
+
+
+# ---- Ask AI about the estimate (Estimate Assistant Agent) ---------------------------
+
+
+class DeliveryApproachIn(BaseModel):
+    key: str = Id
+    label: str = Field(min_length=1, max_length=100)
+    note: str = Field("", max_length=300)
+
+
+class ScopeItem(BaseModel):
+    key: str = Id
+    label: str = Field(min_length=1, max_length=300)
+    kind: Literal["core", "custom", "standard"]
+    days: int = Field(ge=0, le=100_000)
+    must: bool = False
+
+
+class EstimateState(BaseModel):
+    """The estimate as it stands, without any price: the price is never sent to the AI."""
+
+    engagement_model: str = Field("", max_length=100)
+    delivery_approach: str = Id
+    delivery_approaches: list[DeliveryApproachIn] = Field(default_factory=list, max_length=10)
+    weeks: int = Field(ge=1, le=520)
+    team: int = Field(ge=1, le=200)
+    person_days: int = Field(ge=0, le=1_000_000)
+    team_min: int = Field(ge=1, le=200)
+    team_max: int = Field(ge=1, le=200)
+    weeks_min: int = Field(ge=1, le=520)
+    weeks_max: int = Field(ge=1, le=520)
+    in_scope: list[ScopeItem] = Field(default_factory=list, max_length=120)
+    out_of_scope: list[ScopeItem] = Field(default_factory=list, max_length=120)
+    price_set: bool = Field(False, description="Commercial set the price (no amount is ever sent).")
+    team_set: bool = Field(False, description="The team size was set, not the standard one.")
+    can_change_price: bool = Field(False, description="This person may change the price.")
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "EstimateState":
+        if self.team_min > self.team_max or self.weeks_min > self.weeks_max:
+            raise ValueError("team_min/weeks_min must not be above team_max/weeks_max.")
+        _unique([i.key for i in self.in_scope + self.out_of_scope], "scope item key")
+        return self
+
+
+AmountRef = Annotated[str, Field(pattern=r"^AMOUNT_\d{1,2}$")]
+
+
+class EstimateRequestRequest(BaseModel):
+    ask: str = Field(
+        min_length=1,
+        max_length=500,
+        description="The person's words; the backend replaces money amounts by [AMOUNT_1], [AMOUNT_2]...",
+    )
+    amounts: list[AmountRef] = Field(default_factory=list, max_length=5)
+    state: EstimateState
+
+
+class EstimateActionOut(BaseModel):
+    kind: EstimateActionKind
+    key: str | None = Field(None, description="leave_out / add_back: a scope item; else an approach key.")
+    weeks: int | None = Field(None, description="set_timeline: the target weeks.")
+    team: int | None = Field(None, description="set_team: the team size.")
+    amount_ref: str | None = Field(None, description="set_price: one of `amounts`, e.g. AMOUNT_1.")
+    percent: float | None = Field(None, description="set_price: change against the current price, e.g. -20.")
+
+
+class EstimateRequestResponse(BaseModel):
+    understood: bool = Field(description="False: not about this estimate, or unclear; no actions then.")
+    message: str = Field(description="The reply to the person, plain text, never a money amount.")
+    actions: list[EstimateActionOut] = Field(description="Only actions the estimate allows, for the backend.")
+    meta: Meta
+
+
+# ---- Write a case study (Case Study Writer Agent) ------------------------------------
+
+
+class CaseStudyFacts(BaseModel):
+    """What the writer may say about the proposal. Never its price."""
+
+    client: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    industry: str = Field("", max_length=100)
+    engagement_model: str = Field("", max_length=100)
+    outcome: Literal["won", "lost"]
+    reason: str = Field("", max_length=500, description="Why we won, or the lesson from the loss.")
+    weeks: int | None = Field(None, ge=0, le=520)
+    features: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=40)
+
+
+class CaseStudyTemplateSection(BaseModel):
+    key: str = Id
+    title: str = Field(min_length=1, max_length=200)
+    guidance: str = Field("", max_length=2000)
+
+
+class WriteCaseStudyRequest(BaseModel):
+    entry_id: str = Field(
+        min_length=1, max_length=64, description="The library entry; its indexed passages are read if any."
+    )
+    facts: CaseStudyFacts
+    template: list[CaseStudyTemplateSection] = Field(default_factory=list, max_length=30)
+
+
+class CaseStudyMetricOut(BaseModel):
+    v: str = Field(description="The number, e.g. 40%; only numbers written in the facts or the proposal.")
+    l: str = Field(description="What it measures.")  # noqa: E741  # the backend's field names
+
+
+class CaseStudyCardOut(BaseModel):
+    title: str
+    text: str = ""
+
+
+class CaseStudyPillarOut(CaseStudyCardOut):
+    tag: str = ""
+
+
+class CaseStudySourceOut(BaseModel):
+    passage_id: str
+    page: int | None
+
+
+class WriteCaseStudyResponse(BaseModel):
+    title: str
+    summary: str
+    metrics: list[CaseStudyMetricOut]
+    industry: str
+    scope: str
+    engagement: str
+    about_client: str
+    challenges: list[CaseStudyCardOut]
+    solution_intro: str
+    solution_pillars: list[CaseStudyPillarOut]
+    features: list[str]
+    why_us: str
+    sources: list[CaseStudySourceOut] = Field(description="The proposal's passages the story came from.")
+    dropped: list[str] = Field(description="What the checks removed (a money amount, an invented metric).")
     meta: Meta

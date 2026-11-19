@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     sizing_effort: ReasoningEffort | None = "low"
     # Checking one typed answer while the user waits: kept as fast as possible.
     answer_check_effort: ReasoningEffort | None = "low"
+    # Step 6 'Ask AI' turns a request into estimate actions while the user waits: kept fast.
+    estimate_assistant_effort: ReasoningEffort | None = "low"
+    # A case study from a past proposal: a story in the template's voice, written once per proposal.
+    case_study_writer_effort: ReasoningEffort | None = "medium"
     # Only sent when set, and only accepted by non-reasoning models (e.g. gpt-4.1).
     temperature: float | None = Field(default=None, ge=0, le=2)
     request_timeout_s: float = 120.0

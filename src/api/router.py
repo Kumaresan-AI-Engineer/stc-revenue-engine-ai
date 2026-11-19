@@ -16,6 +16,8 @@ from api.schemas import (
     DraftAnswersRequest,
     DraftAnswersResponse,
     EntryMetaIn,
+    EstimateRequestRequest,
+    EstimateRequestResponse,
     FinalCheckRequest,
     FinalCheckResponse,
     IndexResponse,
@@ -26,6 +28,8 @@ from api.schemas import (
     SimilarResponse,
     SizeRequirementsRequest,
     SizeRequirementsResponse,
+    WriteCaseStudyRequest,
+    WriteCaseStudyResponse,
     WriteSectionsRequest,
     WriteSectionsResponse,
 )
@@ -38,8 +42,10 @@ from services import analyse as analyse_service
 from services import (
     answer_check,
     assumptions,
+    case_studies,
     clarification,
     drafting,
+    estimate_assistant,
     final_check,
     library,
     proposal_writing,
@@ -167,6 +173,37 @@ async def write_sections(
     """Section Writer Agent: each section written from the facts only, following its template guidance, as
     plain paragraphs. A missing fact reads "[to be completed]"; a paragraph with money in it is dropped."""
     return await proposal_writing.write_sections(ctx, body, llm, cache, settings)
+
+
+@router.post("/proposals/estimate-request", response_model=EstimateRequestResponse, tags=["proposals"])
+async def estimate_request(
+    body: EstimateRequestRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> EstimateRequestResponse:
+    """Estimate Assistant Agent (Step 6 'Ask AI'): the person's request about the estimate as actions the
+    backend applies: leave out or add back scope, change the delivery approach, set the timeline or team, set
+    or reset the price. Only actions the estimate allows; no figure is computed here and no price is ever
+    sent."""
+    return await estimate_assistant.estimate_request(ctx, body, llm, cache, settings)
+
+
+@router.post("/case-studies/write", response_model=WriteCaseStudyResponse, tags=["case studies"])
+async def write_case_study(
+    body: WriteCaseStudyRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    index: LibraryIndex = Depends(library_index),
+    vectors: Vectorizer = Depends(vectorizer),
+    settings: Settings = Depends(get_settings),
+) -> WriteCaseStudyResponse:
+    """Case Study Writer Agent: a case study from a won (customer story) or lost (lessons learned) proposal,
+    in the case study template's voice, from its facts and its indexed passages. No money; a metric only when
+    its number is in the facts or the proposal."""
+    return await case_studies.write_case_study(ctx, body, llm, cache, index, vectors, settings)
 
 
 @router.post("/proposals/clarifications/assume", response_model=AssumeAnswersResponse, tags=["proposals"])
