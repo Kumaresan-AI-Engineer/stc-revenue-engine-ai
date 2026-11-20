@@ -1,7 +1,7 @@
 """The code checks around the Estimate Assistant and the Case Study Writer, without a model."""
 
 from agents import case_study_writer, estimate_assistant
-from agents.case_study_writer import CaseStudyWriterOutput, SourcePassage
+from agents.case_study_writer import CaseStudyWriterOutput, SourcePassage, TemplateSection
 from agents.estimate_assistant import Action, ActionOut, EstimateAssistantOutput, Limits
 
 LIMITS = Limits(
@@ -119,6 +119,7 @@ def _story(**fields: object) -> CaseStudyWriterOutput:
         "solution_pillars": [{"title": "Live map", "text": "Every truck.", "tag": "live"}],
         "features": ["Live tracking", ""],
         "why_us": "Fastest go-live.",
+        "sections": [],
         "sources": ["p1", "p-unknown", "p1"],
     }
     return CaseStudyWriterOutput.model_validate(base | fields)
@@ -133,7 +134,7 @@ def test_metrics_only_from_the_facts_or_the_passages_and_never_money() -> None:
         {"v": "2", "l": "Weeks early"},  # "2" only inside 120,000 and 1,200: not written as a number
         {"v": "EUR 120,000", "l": "Contract value"},  # money
     ]
-    draft, notes = case_study_writer.check(_story(metrics=metrics), FACTS, PASSAGES)
+    draft, notes = case_study_writer.check(_story(metrics=metrics), FACTS, PASSAGES, [])
     assert draft.metrics == [
         {"v": "35%", "l": "Faster dispatch"},
         {"v": "26 wk", "l": "Delivery timeline"},
@@ -148,11 +149,31 @@ def test_the_story_is_plain_text_within_the_limits_and_cites_known_passages() ->
         why_us="We won because the price was 40,000.",
         solution_pillars=[{"title": "Live map", "text": "x", "tag": "live"}] * 8,
     )
-    draft, notes = case_study_writer.check(story, FACTS, PASSAGES)
+    draft, notes = case_study_writer.check(story, FACTS, PASSAGES, [])
     assert draft.summary.startswith("Bold claim word") and len(draft.summary) <= case_study_writer.SUMMARY_MAX
     assert draft.why_us == "" and "why_us" in notes[0]
     assert len(draft.solution_pillars) == 6 and draft.solution_pillars[0]["tag"] == "LIVE"
     assert draft.features == ["Live tracking"] and draft.sources == ["p1"]
     assert draft.engagement == "Fixed cost, 26 weeks"  # the engagement model name is not money
-    _, notes = case_study_writer.check(_story(title="", summary=" "), FACTS, PASSAGES)
+    _, notes = case_study_writer.check(_story(title="", summary=" "), FACTS, PASSAGES, [])
     assert "title: write a title." in notes and "summary: write a summary." in notes
+
+
+def test_every_template_section_is_written_in_its_order_as_plain_paragraphs_without_money() -> None:
+    template = [
+        TemplateSection("s1", "Summary", "One paragraph."),
+        TemplateSection("s2", "The challenge", "The client's view."),
+        TemplateSection("s3", "Results", "Numbers from the proposal only."),
+    ]
+    story = _story(
+        sections=[
+            {"key": "s2", "paragraphs": ["**Trucks** went dark between depots.", "The fee was EUR 120,000."]},
+            {"key": "s1", "paragraphs": ["Bluewater sees every truck."] * 7},
+            {"key": "s9", "paragraphs": ["Not a template section."]},
+        ]
+    )
+    draft, notes = case_study_writer.check(story, FACTS, PASSAGES, template)
+    assert [s["key"] for s in draft.sections] == ["s1", "s2"]  # the template's order; an unknown key dropped
+    assert len(draft.sections[0]["paragraphs"]) == 5  # at most MAX_PARAGRAPHS
+    assert draft.sections[1]["paragraphs"] == ["Trucks went dark between depots."]  # plain, money dropped
+    assert any("money" in n for n in notes) and "section 'Results' (s3): write it." in notes

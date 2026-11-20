@@ -1,7 +1,8 @@
 """Use-case: write a case study from a decided past proposal.
 
 passages of the proposal (vector search within the entry, when it is indexed) → story (agent) → plain text, no
-money, no invented metric (code) → one retry when the title or summary is empty → cache.
+money, no invented metric (code) → one retry when the title or summary is empty or a template section is not
+written → cache.
 """
 
 from dataclasses import asdict
@@ -79,11 +80,11 @@ async def write_case_study(
     usage = Usage()
     done = await agent.ask(llm, facts, template, passages, [], settings.case_study_writer_effort)
     usage.add(done.usage)
-    draft, dropped = agent.check(done.value, facts, passages)
-    if not draft.title or not draft.summary:
+    draft, dropped = agent.check(done.value, facts, passages, template)
+    if not draft.title or not draft.summary or len(draft.sections) < len(template):
         done = await agent.ask(llm, facts, template, passages, dropped, settings.case_study_writer_effort)
         usage.add(done.usage)
-        draft, dropped = agent.check(done.value, facts, passages)
+        draft, dropped = agent.check(done.value, facts, passages, template)
     body = _body(draft, passages, dropped)
     await cache.put(ctx.workspace_id, key, "write_case_study", body)
     return WriteCaseStudyResponse(**body, meta=meta(llm.model, VERSIONS, usage, cached=False))

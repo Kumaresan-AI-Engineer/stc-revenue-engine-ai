@@ -2,10 +2,11 @@
 the workspace's case study template.
 
 It reads the proposal's facts and, when the proposal is indexed, passages of its own text. A won bid becomes a
-customer story; a lost bid the lessons learned. `check` keeps plain text within the limits, drops anything
-with money in it (the AI never writes prices, and a past proposal's commercial section may be among the
-passages) and drops a metric whose number is in neither the facts nor the passages: results are never
-invented.
+customer story; a lost bid the lessons learned. Like the proposal's Section Writer, it writes each section of
+the case study template (`sections`), in the template's order, following each section's guidance. `check`
+keeps plain text within the limits, drops anything with money in it (the AI never writes prices, and a past
+proposal's commercial section may be among the passages) and drops a metric whose number is in neither the
+facts nor the passages: results are never invented.
 """
 
 import json
@@ -13,14 +14,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from agents.section_writer import plain
+from agents.section_writer import MAX_PARAGRAPHS, PARAGRAPH_MAX, plain
 from core.config import ReasoningEffort
 from llm.ports import LLM, AgentCall, Completion
 from rules.text import mentions_money, normalize
 
-PROMPT_VERSION = "case-study-writer-v1"
+PROMPT_VERSION = "case-study-writer-v2"
 TITLE_MAX, SUMMARY_MAX = 200, 1500
 SHORT_MAX = {"industry": 200, "scope": 300, "engagement": 300}
 LONG_MAX = 3000  # about_client, solution_intro, why_us
@@ -43,12 +44,17 @@ Return every field of the output:
 - `metrics`: up to {MAX_METRICS} {{v, l}} (value at most {METRIC_VALUE_MAX} characters, e.g. "26 wk", "40%";
   label at most {METRIC_LABEL_MAX}). Only numbers written in the facts or the passages; none is better than
   an invented one.
+- `sections`: one {{key, paragraphs}} for every template section, with its key: the section written as
+  the template's guidance says, in 1 to {MAX_PARAGRAPHS} paragraphs of plain text, each at most
+  {PARAGRAPH_MAX} characters. This is the case study's document; the fields above feed its cards and
+  headline numbers.
 - `sources`: the ids of the passages you used.
 
 Rules:
 - outcome "won": a customer success story about what we proposed and delivered. outcome "lost": an honest
   lessons learned piece; never present it as a success or as delivered work.
-- Follow the template sections' guidance (tone, what to cover) where they map to these fields.
+- Follow each template section's guidance (tone, what to cover); write every section, even one whose facts are
+  thin (then keep it short and general, never invented).
 - Use ONLY the facts and the passages. Never invent results, names, dates, numbers or quotes.
 - Plain text only: no HTML, no markdown, no bullets.
 - Never write prices, rates, fees, costs, budgets or any money amount, even when a passage contains one.
@@ -68,6 +74,11 @@ class MetricOut(BaseModel):
     l: str  # noqa: E741  # the backend's metric field names (v = value, l = label)
 
 
+class SectionOut(BaseModel):
+    key: str
+    paragraphs: list[str]
+
+
 class CaseStudyWriterOutput(BaseModel):
     title: str
     summary: str
@@ -81,6 +92,7 @@ class CaseStudyWriterOutput(BaseModel):
     solution_pillars: list[CardOut]
     features: list[str]
     why_us: str
+    sections: list[SectionOut] = Field(default_factory=list)
     sources: list[str]
 
 
@@ -112,6 +124,7 @@ class CaseStudyDraft:
     solution_pillars: list[dict[str, str]] = field(default_factory=list)
     features: list[str] = field(default_factory=list)
     why_us: str = ""
+    sections: list[dict[str, Any]] = field(default_factory=list)  # {key, paragraphs}, in the template's order
     sources: list[str] = field(default_factory=list)
 
 
@@ -119,7 +132,7 @@ def _input(
     facts: dict[str, Any], template: list[TemplateSection], passages: list[SourcePassage], notes: list[str]
 ) -> str:
     lines = ["Facts (JSON):", json.dumps(facts, ensure_ascii=False, indent=1), "", "Template sections:"]
-    lines += [f"- {t.title}: {t.guidance or '(no guidance)'}" for t in template] or ["(none)"]
+    lines += [f"- {t.key}: {t.title} — {t.guidance or '(no guidance)'}" for t in template] or ["(none)"]
     lines += ["", "Passages from the proposal (id, page: text):"]
     lines += [f"- {p.id} (p. {p.page or '?'}): {p.text}" for p in passages] or ["(none: use the facts only)"]
     if notes:
@@ -189,13 +202,34 @@ class _Checker:
             out.append(card)
         return out[:MAX_ITEMS]
 
+    def sections(self, written: list[SectionOut], template: list[TemplateSection]) -> list[dict[str, Any]]:
+        """Each template section once, in its order, as plain paragraphs without money; a note for each one
+        missing."""
+        by_key = {s.key: s for s in written}
+        out = []
+        for t in template:
+            section = by_key.get(t.key)
+            paragraphs = [
+                kept
+                for i, p in enumerate(section.paragraphs[:MAX_PARAGRAPHS] if section else [])
+                if (kept := self.text(f"section '{t.title}' paragraph {i + 1}", p, PARAGRAPH_MAX))
+            ]
+            if paragraphs:
+                out.append({"key": t.key, "paragraphs": paragraphs})
+            else:
+                self.notes.append(f"section '{t.title}' ({t.key}): write it.")
+        return out
+
     def features(self, names: list[str]) -> list[str]:
         kept = (self.text(f"feature {i + 1}", n, FEATURE_MAX) for i, n in enumerate(names))
         return [f for f in kept if f][:MAX_FEATURES]
 
 
 def check(
-    output: CaseStudyWriterOutput, facts: dict[str, Any], passages: list[SourcePassage]
+    output: CaseStudyWriterOutput,
+    facts: dict[str, Any],
+    passages: list[SourcePassage],
+    template: list[TemplateSection],
 ) -> tuple[CaseStudyDraft, list[str]]:
     """The draft within the limits, as plain text with no money, and a note for everything dropped."""
     notes: list[str] = []
@@ -227,6 +261,7 @@ def check(
         solution_pillars=c.cards("solution pillar", output.solution_pillars, tags=True),
         features=c.features(output.features),
         why_us=c.text("why_us", output.why_us, LONG_MAX),
+        sections=c.sections(output.sections, template),
         sources=list(dict.fromkeys(s for s in output.sources if s in known)),
     )
     if not draft.title:

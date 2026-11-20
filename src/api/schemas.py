@@ -607,6 +607,11 @@ class CaseStudyPillarOut(CaseStudyCardOut):
     tag: str = ""
 
 
+class CaseStudySectionOut(BaseModel):
+    key: str = Field(description="The template section's key, as sent.")
+    paragraphs: list[str] = Field(description="Plain-text paragraphs, following the section's guidance.")
+
+
 class CaseStudySourceOut(BaseModel):
     passage_id: str
     page: int | None
@@ -625,6 +630,9 @@ class WriteCaseStudyResponse(BaseModel):
     solution_pillars: list[CaseStudyPillarOut]
     features: list[str]
     why_us: str
+    sections: list[CaseStudySectionOut] = Field(
+        default_factory=list, description="Each template section written, in the template's order."
+    )
     sources: list[CaseStudySourceOut] = Field(description="The proposal's passages the story came from.")
     dropped: list[str] = Field(description="What the checks removed (a money amount, an invented metric).")
     meta: Meta

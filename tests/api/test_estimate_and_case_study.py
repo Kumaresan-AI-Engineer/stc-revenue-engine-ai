@@ -229,6 +229,12 @@ def _story(call: AgentCall[Any], **fields: Any) -> dict[str, Any]:
         "solution_pillars": [{"title": "Live map", "text": "Every truck, live.", "tag": "live"}],
         "features": ["Live tracking", "Alerts"],
         "why_us": "We won on a fixed fee of EUR 120,000.",
+        "sections": [
+            {
+                "key": "challenge",
+                "paragraphs": ["Bluewater could not see its trucks.", "The fee was EUR 120,000."],
+            }
+        ],
         "sources": _passage_ids(call)[:2],
     } | fields
 
@@ -243,13 +249,17 @@ async def test_a_case_study_is_written_from_the_indexed_proposal_without_money_o
     assert r.status_code == 200, r.text
     data = r.json()
     call = next(c for c in env.llm.calls if c.agent == "case_study_writer")
-    assert "dispatch time fell by 35%" in call.input and "The challenge: Two short paragraphs" in call.input
+    assert (
+        "dispatch time fell by 35%" in call.input
+        and "challenge: The challenge — Two short paragraphs" in call.input
+    )
     assert data["metrics"] == [{"v": "35%", "l": "Faster dispatch"}]  # 60% is in neither facts nor passages
     assert data["why_us"] == "" and any("money" in d for d in data["dropped"])
     assert data["engagement"] == "Fixed cost, 26 weeks"
     assert data["sources"] and all(s["passage_id"] in _passage_ids(call) for s in data["sources"])
     assert data["solution_pillars"][0]["tag"] == "LIVE"
-    assert data["meta"]["prompt_versions"] == {"case_study_writer": "case-study-writer-v1"}
+    assert data["sections"] == [{"key": "challenge", "paragraphs": ["Bluewater could not see its trucks."]}]
+    assert data["meta"]["prompt_versions"] == {"case_study_writer": "case-study-writer-v2"}
     again = await env.client.post(CASE_STUDY, json=body, headers=env.auth())
     assert again.json()["meta"]["cached"] is True and env.llm.count("case_study_writer") == 1
 
