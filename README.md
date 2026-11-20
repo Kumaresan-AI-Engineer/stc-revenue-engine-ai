@@ -31,7 +31,10 @@ Agents with one job each, run in a fixed order by code (no AI decides what runs 
 | 6 Estimate | — | Prices never AI. The estimate stays in the backend's `estimate.py`; Sizing only suggests person-days. | — |
 
 Background: the **Library indexer** splits each past proposal into passages, removes amounts, embeds them and
-stores them per workspace.
+stores them per workspace. A page gives packed passages (whole sentences up to 1200 characters, the context a
+writer quotes) and each list item or short line on its own: a requirement of a few words matches the bullet that
+states it (0.85+) where a page of bullets scores like unrelated text (~0.6). `CHUNKING_VERSION` is part of the
+content hash, so an entry is indexed again when the passages change.
 
 Every agent call follows the same loop: **agent → code check → review → one retry with the problems as notes →
 anything still failing is dropped or marked `needs_person`**. Nothing is guessed.

@@ -19,10 +19,12 @@ from core.config import ReasoningEffort
 from llm.ports import LLM, AgentCall, Completion
 from rules.text import mentions_amount
 
-PROMPT_VERSION = "estimate-assistant-v1"
+PROMPT_VERSION = "estimate-assistant-v2"
 MESSAGE_MAX = 600
 MAX_ACTIONS = 10
 PERCENT_MIN, PERCENT_MAX = -90.0, 200.0
+# A price change the request gives no figure for stays this small; the backend refuses a bigger one.
+SMALL_CUT_MAX = 25.0
 WEEKS_MAX = 520
 
 ActionKind = Literal[
@@ -64,7 +66,8 @@ Return `understood`, `message` and `actions`.
   answer. Never write a money amount or a currency; you never know the price. You may repeat a reference such
   as [AMOUNT_1] or a percentage.
 - `actions` (at most {MAX_ACTIONS}), each with `kind` and only the fields it needs:
-  - leave_out {{key}}: take an in-scope item out. Never an item with must = true.
+  - leave_out {{key}}: take an in-scope item out. Never an item with must = true. Only an item the request
+    names; when it asks to cut the scope without naming one, only the single optional item with the most days.
   - add_back {{key}}: put an out-of-scope item back in scope.
   - delivery_approach {{key}}: switch to another listed approach (some cost less effort).
   - set_timeline {{weeks}}: the target timeline in weeks ("extend to 30 weeks" -> 30; "extend by 4 weeks" ->
@@ -76,9 +79,12 @@ Return `understood`, `message` and `actions`.
     price ("reduce the cost by 20%" -> -20, "raise it 10%" -> 10). The system scales effort, team and
     timeline to fit it.
   - reset_price: back to the pricing rules' price; only when can_change_price is true.
-- "Reduce the cost" without a figure: leave out the in-scope items that are not must-haves and add the most
-  days (custom, then core, then standard), or switch to a delivery approach that needs less effort. A percent
-  cut only when the person names a percentage or an amount.
+- "Reduce the cost" without a figure: make the smallest change that lowers it, and never change the scope for
+  it (the scope is what the client asked for). When can_change_price is true: set_price with a percent that
+  matches the words: "a bit", "slightly" -> -5; no qualifier -> -10; "a lot", "significantly" -> -20; never
+  beyond -{SMALL_CUT_MAX:g} without a figure in the request. Otherwise switch to a listed delivery approach
+  that needs less effort, if there is one; else change nothing, and say they can name an item to leave out or
+  ask someone who sets prices.
 - Use only keys from the state. Never invent items, approaches or amounts.
 - When can_change_price is false and the person asks to set the price, change nothing about the price and say
   that only Commercial can set the price.

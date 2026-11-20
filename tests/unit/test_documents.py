@@ -75,6 +75,27 @@ def test_passages_are_deterministic_redacted_and_bounded() -> None:
     assert not any("€" in p.text for p in first)
 
 
+def test_list_items_are_passages_of_their_own() -> None:
+    page = Page(
+        2,
+        "Scope\n• Plagiarism checking and rubric-based grading\n- LTI 1.3 support for third-party tools\n"
+        "3. Migration of 6 years of course content\n17,000 students use it daily\nShort line",
+    )
+    found = passages("e", "rfp", [page])
+    assert found[0].text.startswith("Scope")  # the packed passage first, for context
+    assert [p.text for p in found[1:]] == [
+        "Plagiarism checking and rubric-based grading",
+        "LTI 1.3 support for third-party tools",
+        "Migration of 6 years of course content",
+        "17,000 students use it daily",  # a number that is not an item marker is kept
+    ]
+    assert all(p.page == 2 for p in found) and len({p.id for p in found}) == len(found)
+
+
+def test_a_single_line_is_not_indexed_twice() -> None:
+    assert len(passages("e", "rfp", [Page(1, "We delivered an offline driver mobile app.")])) == 1
+
+
 def test_very_long_sentence_is_split() -> None:
     (page_passages) = passages("e", "rfp", [Page(1, "a" * (MAX_PASSAGE_CHARS * 3))])
     assert len(page_passages) >= 3

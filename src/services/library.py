@@ -13,7 +13,7 @@ from api.schemas import (
 )
 from core.errors import NotFound, RuleViolation
 from core.security import ServiceContext
-from documents.chunking import Passage, passages, summary_passage
+from documents.chunking import CHUNKING_VERSION, Passage, passages, summary_passage
 from documents.parsing import extract_pages
 from rules.matching import SEARCH_POOL, best_per_entry
 from rules.text import stable_hash
@@ -39,7 +39,9 @@ async def index_entry(
     if not files and not meta.summary.strip():
         raise RuleViolation("content", "Send the RFP, the proposal or a summary to index.")
     content_hash = stable_hash(
-        meta.model_dump(), {s: (name, hashlib.sha256(data).hexdigest()) for s, (name, data) in files.items()}
+        meta.model_dump(),
+        {s: (name, hashlib.sha256(data).hexdigest()) for s, (name, data) in files.items()},
+        CHUNKING_VERSION,
     )
     if (await index.content_hashes(ctx.workspace_id, [entry_id])).get(entry_id) == content_hash:
         return IndexResponse(entry_id=entry_id, passages=0, content_hash=content_hash, unchanged=True)

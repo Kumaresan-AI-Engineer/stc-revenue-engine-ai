@@ -97,7 +97,7 @@ async def test_a_dropped_action_is_asked_again_once_and_the_answer_is_cached(env
     data = r.json()
     assert data["understood"] is True and env.llm.count("estimate_assistant") == 2
     assert data["actions"] == [_action("leave_out", key="x_driver"), _action("set_timeline", weeks=30)]
-    assert data["meta"]["prompt_versions"] == {"estimate_assistant": "estimate-assistant-v1"}
+    assert data["meta"]["prompt_versions"] == {"estimate_assistant": "estimate-assistant-v2"}
     sent = env.llm.calls[0].input.split("State (JSON):", 1)[1]
     assert '"price"' not in sent and '"can_change_price": true' in sent  # no price is ever sent
     again = await env.client.post(ESTIMATE, json=body, headers=env.auth())

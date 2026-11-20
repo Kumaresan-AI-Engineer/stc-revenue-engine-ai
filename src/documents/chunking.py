@@ -1,5 +1,11 @@
 """Split pages into passages for the library index. Deterministic: the same document always gives
-the same passages with the same ids, so re-indexing replaces rather than duplicates."""
+the same passages with the same ids, so re-indexing replaces rather than duplicates.
+
+A page gives two kinds of passage: whole sentences packed up to MAX_PASSAGE_CHARS (the context a writer
+quotes), and each list item or short line on its own. A requirement is a few words: compared with a packed
+passage of a dozen bullet points it scores like unrelated text (about 0.6 with bge-small), while the bullet
+that states it scores 0.85 or more. Without line passages, a past RFP or proposal written as lists never
+matches a custom requirement."""
 
 import re
 from dataclasses import dataclass
@@ -9,7 +15,16 @@ from rules.text import redact_amounts, stable_hash
 
 MAX_PASSAGE_CHARS = 1200
 OVERLAP_CHARS = 150
+# A line passage: a list item or a short paragraph. Shorter lines are headings ("Scope of work"); longer
+# ones are prose the packed passages already cover sentence by sentence.
+LINE_MIN_WORDS = 3
+LINE_MAX_CHARS = 300
+# Part of an entry's content hash: bump it when the passages a document gives change, so entries indexed
+# before are indexed again instead of being reported unchanged.
+CHUNKING_VERSION = 2
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# A list marker: a bullet or dash, or an item number such as "3." or "b)".
+_LIST_MARKER = re.compile(r"^(?:[\u2022\u25aa\u25cf\u25e6\u2013\u2014*-]|\(?(?:\d{1,2}|[a-z])[.)])\s+")
 
 
 @dataclass(frozen=True)
@@ -39,10 +54,24 @@ def _split(text: str) -> list[str]:
     return out
 
 
+def _lines(text: str, packed: list[str]) -> list[str]:
+    """The page's list items and short lines, each once and unmarked; none repeats a packed passage."""
+    seen = set(packed)
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = _LIST_MARKER.sub("", raw.strip()).strip()
+        if len(line.split()) >= LINE_MIN_WORDS and len(line) <= LINE_MAX_CHARS and line not in seen:
+            seen.add(line)
+            out.append(line)
+    return out
+
+
 def passages(entry_id: str, section: str, pages: list[Page]) -> list[Passage]:
     out: list[Passage] = []
     for page in pages:
-        for text in _split(redact_amounts(page.text)):
+        clean = redact_amounts(page.text)
+        packed = _split(clean)
+        for text in [*packed, *_lines(clean, packed)]:
             ordinal = len(out)
             out.append(
                 Passage(
