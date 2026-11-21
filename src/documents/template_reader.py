@@ -1,8 +1,11 @@
 """template_extract: read a template (DOCX) into the backend's TemplateSpec shape, without the model.
 
-The document's real headings become sections (a proposal template's mapped to the backend's section keys
-where the titles match; a case study template's all `custom`, written for each case study when the heading
-names a part of one and fixed text otherwise), its styles give fonts and colours, its first section the page,
+The document's real headings become sections: its Word heading styles, or, in a document that has none, the
+lines set apart by hand as headings (bold, at the size most such lines share; a larger one is the title, a
+smaller one a label), even one run on at the end of a paragraph. A proposal template's are mapped to the
+backend's section keys where the titles match; a case study template's are all `custom`, written for each case
+study when the heading names a part of one and fixed text otherwise. Its styles give fonts and colours (the
+colour of headings set by hand when it has no heading styles), its first section the page,
 header and footer. Deterministic and pure (no I/O). The backend validates and cleans the result (docgen
 apply_extraction) and an admin reviews it before it is used. The document's text is copied in as data and
 never interpreted.
@@ -16,8 +19,9 @@ import io
 import posixpath
 import re
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -27,6 +31,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.section import Section, _Footer, _Header
 from docx.styles.style import ParagraphStyle
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 
 class TemplateKind(StrEnum):
@@ -143,6 +148,19 @@ _CASE_STUDY_PARTS = frozenset(
         "timeline",
         "team",
         "services",
+        # A sample case study laid out like the project's own brief: what was asked and how it was judged.
+        "scope",
+        "work",
+        "requirements",
+        "requirement",
+        "deliverables",
+        "features",
+        "objectives",
+        "goals",
+        "context",
+        "situation",
+        "criteria",
+        "evaluation",
     }
 )
 CASE_STUDY_SECTIONS = ("Summary", "The client", "The challenge", "Our solution", "Results")
@@ -186,6 +204,19 @@ class UnreadableDocument(Exception):
 class _Heading:
     title: str
     body: list[str] = field(default_factory=list)
+    colour: str | None = None  # the heading's own text colour, when set by hand
+
+
+@dataclass(frozen=True)
+class _Part:
+    """A paragraph, or the part of one before or after a heading run on at its end, and whether it is a
+    heading (at what size, in what colour)."""
+
+    paragraph: Paragraph
+    text: str
+    heading: bool = False
+    size: float | None = None
+    colour: str | None = None
 
 
 def read_template(data: bytes, kind: TemplateKind = TemplateKind.PROPOSAL) -> dict[str, Any]:
@@ -204,7 +235,7 @@ def heading_count(data: bytes) -> int:
         paragraphs = list(docx.Document(io.BytesIO(data)).paragraphs)
     except Exception as exc:  # the same as read_template: a file that cannot be parsed cannot be read
         raise UnreadableDocument from exc
-    return len(_split(paragraphs, _section_level(paragraphs))[1])
+    return len(_split(paragraphs)[1])
 
 
 def embedded_images(data: bytes, limit: int) -> list[tuple[str, bytes]]:
@@ -228,8 +259,7 @@ def embedded_images(data: bytes, limit: int) -> list[tuple[str, bytes]]:
 
 def _extract(document: Document, kind: TemplateKind) -> dict[str, Any]:
     paragraphs = list(document.paragraphs)
-    level = _section_level(paragraphs)
-    cover_part, headings = _split(paragraphs, level)
+    cover_part, headings = _split(paragraphs)
     warnings = [REVIEW_WARNING]
     reader = READERS[kind]
     sections = reader.sections(headings)
@@ -246,7 +276,7 @@ def _extract(document: Document, kind: TemplateKind) -> dict[str, Any]:
     first = document.sections[0]
     return {
         "branding": {
-            "colors": _colors(document),
+            "colors": _colors(document, headings),
             "fonts": {"heading": _font(document, "Heading 1"), "body": _font(document, "Normal")},
             "logo": _logo(first, cover_part),
         },
@@ -279,20 +309,120 @@ def _section_level(paragraphs: list[Paragraph]) -> int | None:
     return min(levels, default=None)
 
 
-def _split(paragraphs: list[Paragraph], level: int | None) -> tuple[list[Paragraph], list[_Heading]]:
+def _split(paragraphs: list[Paragraph]) -> tuple[list[Paragraph], list[_Heading]]:
     """The paragraphs before the first section (the cover) and each section's heading with its text."""
+    level = _section_level(paragraphs)
+    if level is not None:
+        blocks = [_Part(p, p.text.strip(), _heading_level(p) == level) for p in paragraphs]
+    else:
+        blocks = _styled_blocks(paragraphs)
     cover: list[Paragraph] = []
     headings: list[_Heading] = []
-    for p in paragraphs:
-        text = p.text.strip()
-        if level is not None and _heading_level(p) == level and text:
-            headings.append(_Heading(text))
+    for b in blocks:
+        if b.heading and b.text:
+            headings.append(_Heading(b.text, colour=b.colour))
         elif headings:
-            if text:
-                headings[-1].body.append(text)
-        else:
-            cover.append(p)
+            if b.text:
+                headings[-1].body.append(b.text)
+        elif b.paragraph not in cover:
+            cover.append(b.paragraph)
     return cover, headings
+
+
+# ---- Headings set by hand (no heading styles) ---------------------------------------------------------
+
+_HEADING_MAX_CHARS, _HEADING_MAX_WORDS = 80, 10
+_NOT_A_HEADING_END = (".", ",", ";", ":")
+_LIST_ITEM = re.compile(r"^[\u2022\u25aa\u25cf\u25e6\u2013\u2014*-]")
+_MIN_STYLED_HEADINGS = 2
+
+
+def _size(run: Run) -> float | None:
+    return run.font.size.pt if run.font.size is not None else None
+
+
+def _bold(run: Run, paragraph: Paragraph) -> bool:
+    if run.bold is not None:
+        return bool(run.bold)
+    style = paragraph.style
+    return bool(style is not None and style.font.bold)
+
+
+def _run_colour(run: Run) -> str | None:
+    colour = run.font.color
+    if colour is None or colour.type is None or colour.rgb is None:
+        return None
+    return f"#{colour.rgb}"
+
+
+def _body_size(paragraphs: list[Paragraph]) -> float | None:
+    """The size most of the plain text is set in."""
+    sizes: Counter[float] = Counter()
+    for p in paragraphs:
+        for r in p.runs:
+            if (size := _size(r)) is not None and r.text.strip() and not _bold(r, p):
+                sizes[size] += len(r.text)
+    return sizes.most_common(1)[0][0] if sizes else None
+
+
+def _text(runs: list[Run]) -> str:
+    return "".join(r.text for r in runs).strip()
+
+
+def _headline(paragraph: Paragraph, runs: list[Run], body: float | None) -> tuple[str, float | None] | None:
+    """The runs' text and size when they read as a heading: short, bold, not smaller than the body text."""
+    text = _text(runs)
+    visible = [r for r in runs if r.text.strip()]
+    if (
+        not visible
+        or len(text) > _HEADING_MAX_CHARS
+        or len(text.split()) > _HEADING_MAX_WORDS
+        or text.endswith(_NOT_A_HEADING_END)
+        or _LIST_ITEM.match(text)
+        or not all(_bold(r, paragraph) for r in visible)
+    ):
+        return None
+    sizes = [size for r in visible if (size := _size(r)) is not None]
+    size = max(sizes, default=None)
+    if size is not None and body is not None and size < body:
+        return None  # a label above the title ("EDUCATION"), not a heading
+    return text, size
+
+
+def _part(paragraph: Paragraph, runs: list[Run], body: float | None) -> _Part:
+    found = _headline(paragraph, runs, body)
+    if found is None:
+        return _Part(paragraph, _text(runs))
+    colour = next((c for r in runs if r.text.strip() and (c := _run_colour(r))), None)
+    return _Part(paragraph, found[0], heading=True, size=found[1], colour=colour)
+
+
+def _parts(paragraph: Paragraph, body: float | None) -> list[_Part]:
+    """The paragraph whole, or split before a heading run on at its end ("... Budget [amount] Background")."""
+    runs = list(paragraph.runs)
+    whole = _part(paragraph, runs, body)
+    if whole.heading:
+        return [whole]
+    for start in range(1, len(runs)):
+        # The heading starts at the first of its runs, after some plain text.
+        if not _text(runs[:start]) or _headline(paragraph, runs[start - 1 :], body):
+            continue
+        tail = _part(paragraph, runs[start:], body)
+        if tail.heading:
+            return [_Part(paragraph, _text(runs[:start])), tail]
+    return [whole]
+
+
+def _styled_blocks(paragraphs: list[Paragraph]) -> list[_Part]:
+    """The document's blocks with its headings found by their formatting: the lines that read as headings at
+    the size most of them share are the sections; a larger one (the title) and the rest are text."""
+    body = _body_size(paragraphs)
+    parts = [part for p in paragraphs for part in _parts(p, body)]
+    sizes = Counter(part.size for part in parts if part.heading)
+    # The section size: the most common; on a tie the smaller, since a title is set larger than its sections.
+    level = min(sizes, key=lambda size: (-sizes[size], size or 0.0), default=None)
+    found = level is not None and sizes[level] >= _MIN_STYLED_HEADINGS
+    return [replace(part, heading=found and part.heading and part.size == level) for part in parts]
 
 
 def _words(title: str) -> str:
@@ -409,9 +539,10 @@ def _color(document: Document, style_name: str) -> str | None:
     return f"#{rgb}" if rgb is not None else None
 
 
-def _colors(document: Document) -> dict[str, str | None]:
+def _colors(document: Document, headings: list[_Heading]) -> dict[str, str | None]:
+    by_hand = next((h.colour for h in headings if h.colour), None)
     return {
-        "primary": _color(document, "Heading 1"),
+        "primary": by_hand or _color(document, "Heading 1"),  # the headings it really uses
         "secondary": _color(document, "Heading 2"),
         "accent": _color(document, "Title"),
         "text": _color(document, "Normal"),

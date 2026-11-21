@@ -36,6 +36,11 @@ writer quotes) and each list item or short line on its own: a requirement of a f
 states it (0.85+) where a page of bullets scores like unrelated text (~0.6). `CHUNKING_VERSION` is part of the
 content hash, so an entry is indexed again when the passages change.
 
+The **template reader** takes a template's sections from its Word heading styles or, in a document laid out by
+hand without any, from its formatting: the bold lines at the size most of them share (a larger one is the
+title, a smaller one a label), even one run on at the end of a paragraph. The Case Study Writer writes a
+section whose template shows a list as `bullets`.
+
 Every agent call follows the same loop: **agent → code check → review → one retry with the problems as notes →
 anything still failing is dropped or marked `needs_person`**. Nothing is guessed.
 

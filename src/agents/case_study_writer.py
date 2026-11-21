@@ -21,13 +21,14 @@ from core.config import ReasoningEffort
 from llm.ports import LLM, AgentCall, Completion
 from rules.text import mentions_money, normalize
 
-PROMPT_VERSION = "case-study-writer-v2"
+PROMPT_VERSION = "case-study-writer-v3"
 TITLE_MAX, SUMMARY_MAX = 200, 1500
 SHORT_MAX = {"industry": 200, "scope": 300, "engagement": 300}
 LONG_MAX = 3000  # about_client, solution_intro, why_us
 ITEM_TITLE_MAX, ITEM_TEXT_MAX, TAG_MAX = 200, 1000, 40
 MAX_ITEMS, MAX_METRICS, MAX_FEATURES, FEATURE_MAX = 6, 6, 24, 200
 METRIC_VALUE_MAX, METRIC_LABEL_MAX = 40, 80
+MAX_BULLETS, BULLET_MAX = 8, 300
 _PREVIEW = 60
 
 INSTRUCTIONS = f"""You write a case study for a software services company, from one of its past proposals.
@@ -46,8 +47,10 @@ Return every field of the output:
   an invented one.
 - `sections`: one {{key, paragraphs}} for every template section, with its key: the section written as
   the template's guidance says, in 1 to {MAX_PARAGRAPHS} paragraphs of plain text, each at most
-  {PARAGRAPH_MAX} characters. This is the case study's document; the fields above feed its cards and
-  headline numbers.
+  {PARAGRAPH_MAX} characters. When a section's guidance shows a list (lines starting with a bullet or a
+  dash) or asks for one, write it as `bullets`: up to {MAX_BULLETS} short items of at most {BULLET_MAX}
+  characters, with at most one paragraph before them. This is the case study's document; the fields above
+  feed its cards and headline numbers.
 - `sources`: the ids of the passages you used.
 
 Rules:
@@ -77,6 +80,7 @@ class MetricOut(BaseModel):
 class SectionOut(BaseModel):
     key: str
     paragraphs: list[str]
+    bullets: list[str] = Field(default_factory=list)
 
 
 class CaseStudyWriterOutput(BaseModel):
@@ -124,7 +128,8 @@ class CaseStudyDraft:
     solution_pillars: list[dict[str, str]] = field(default_factory=list)
     features: list[str] = field(default_factory=list)
     why_us: str = ""
-    sections: list[dict[str, Any]] = field(default_factory=list)  # {key, paragraphs}, in the template's order
+    # {key, paragraphs, bullets}, in the template's order
+    sections: list[dict[str, Any]] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
 
 
@@ -203,22 +208,24 @@ class _Checker:
         return out[:MAX_ITEMS]
 
     def sections(self, written: list[SectionOut], template: list[TemplateSection]) -> list[dict[str, Any]]:
-        """Each template section once, in its order, as plain paragraphs without money; a note for each one
-        missing."""
+        """Each template section once, in its order, as plain paragraphs and list items without money; a note
+        for each one missing."""
         by_key = {s.key: s for s in written}
         out = []
         for t in template:
-            section = by_key.get(t.key)
-            paragraphs = [
-                kept
-                for i, p in enumerate(section.paragraphs[:MAX_PARAGRAPHS] if section else [])
-                if (kept := self.text(f"section '{t.title}' paragraph {i + 1}", p, PARAGRAPH_MAX))
-            ]
-            if paragraphs:
-                out.append({"key": t.key, "paragraphs": paragraphs})
+            section = by_key.get(t.key) or SectionOut(key=t.key, paragraphs=[])
+            paragraphs = self._kept(
+                f"section '{t.title}' paragraph", section.paragraphs[:MAX_PARAGRAPHS], PARAGRAPH_MAX
+            )
+            bullets = self._kept(f"section '{t.title}' item", section.bullets[:MAX_BULLETS], BULLET_MAX)
+            if paragraphs or bullets:
+                out.append({"key": t.key, "paragraphs": paragraphs, "bullets": bullets})
             else:
                 self.notes.append(f"section '{t.title}' ({t.key}): write it.")
         return out
+
+    def _kept(self, name: str, texts: list[str], limit: int) -> list[str]:
+        return [kept for i, x in enumerate(texts) if (kept := self.text(f"{name} {i + 1}", x, limit))]
 
     def features(self, names: list[str]) -> list[str]:
         kept = (self.text(f"feature {i + 1}", n, FEATURE_MAX) for i, n in enumerate(names))

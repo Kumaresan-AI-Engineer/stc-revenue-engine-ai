@@ -168,12 +168,17 @@ def test_every_template_section_is_written_in_its_order_as_plain_paragraphs_with
     story = _story(
         sections=[
             {"key": "s2", "paragraphs": ["**Trucks** went dark between depots.", "The fee was EUR 120,000."]},
-            {"key": "s1", "paragraphs": ["Bluewater sees every truck."] * 7},
+            {
+                "key": "s1",
+                "paragraphs": ["Bluewater sees every truck."] * 7,
+                "bullets": ["- Live map", "Fee: $9k"],
+            },
             {"key": "s9", "paragraphs": ["Not a template section."]},
         ]
     )
     draft, notes = case_study_writer.check(story, FACTS, PASSAGES, template)
     assert [s["key"] for s in draft.sections] == ["s1", "s2"]  # the template's order; an unknown key dropped
     assert len(draft.sections[0]["paragraphs"]) == 5  # at most MAX_PARAGRAPHS
+    assert draft.sections[0]["bullets"] == ["Live map"]  # plain, the item with money dropped
     assert draft.sections[1]["paragraphs"] == ["Trucks went dark between depots."]  # plain, money dropped
     assert any("money" in n for n in notes) and "section 'Results' (s3): write it." in notes

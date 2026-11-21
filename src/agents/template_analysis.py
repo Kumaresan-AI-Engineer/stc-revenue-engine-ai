@@ -19,7 +19,7 @@ from documents.template_reader import MAX_SECTIONS, SectionKey, TemplateKind, pa
 from llm.ports import LLM, AgentCall, Completion
 from rules.text import mentions_money
 
-PROMPT_VERSION = "template-analysis-v1"
+PROMPT_VERSION = "template-analysis-v2"
 VISION_PROMPT_VERSION = "template-vision-v2"
 REVIEWED_WARNING = "Sections and guidance reviewed by AI."
 IMAGES_WARNING = "The template has no headings, so its sections were read from its pictures by AI."
@@ -47,9 +47,11 @@ For every section, return its `order` and:
 - `key`: {{keys}}
 - `kind`: "generated" when its text changes per document (instructions, placeholders such as [Client],
   example text to replace); "boilerplate" when the template's text is final and the same every time
-  (company profile, legal terms). A section without any text is generated.
+  (company profile, legal terms). A section without any text is generated. In a case study template, text
+  about one particular client or project is a worked example of the section: generated.
 - `guidance`: for a generated section, clear instructions for the writer: what to cover, in what order,
-  the tone and length the template shows, and the placeholders to fill. At most {GUIDANCE_MAX} characters.
+  the tone and length the template shows, and the placeholders to fill. Keep its layout: when the template's
+  text is a list, start with "A bulleted list of N to M short items:". At most {GUIDANCE_MAX} characters.
   Empty for boilerplate.
 Never write prices, rates, fees or any amounts, not even as examples: a person writes those.
 

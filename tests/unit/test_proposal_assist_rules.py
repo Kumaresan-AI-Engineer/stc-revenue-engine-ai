@@ -230,3 +230,56 @@ def test_the_reader_takes_decimal_page_sizes_and_margins() -> None:
     page = template_reader.read_template(out.getvalue(), TemplateKind.PROPOSAL)["page"]
     assert (page["size"], page["width_mm"], page["height_mm"]) == ("A4", 210.0, 297.0)
     assert page["orientation"] == "landscape" and page["margins_mm"]["right"] == 20.0
+
+
+def _hand_styled_case_study() -> bytes:
+    """A case study laid out by hand (every paragraph Normal): a label, a title, a facts line with the first
+    heading run on at its end, then bold 11pt headings over 10pt text and bullet lists."""
+    from docx.shared import Pt, RGBColor
+
+    document = docx.Document()
+
+    def line(*runs: tuple[str, bool, float, str | None]) -> None:
+        p = document.add_paragraph()
+        for text, bold, size, colour in runs:
+            r = p.add_run(text)
+            r.bold, r.font.size = bold, Pt(size)
+            if colour:
+                r.font.color.rgb = RGBColor.from_string(colour)
+
+    line(("EDUCATION", True, 9, "0F8F7A"))
+    line(("University Learning Management System", True, 17, "14264A"))
+    line(
+        ("Issued by Aldermoor University | Ref AU-LMS-2027 ", False, 9, None),
+        ("Background", True, 11, "14264A"),
+    )
+    line(("Aldermoor has 17,000 students on a learning system being retired.", False, 10, None))
+    line(("Scope of work", True, 11, "14264A"))
+    line(("• Course delivery, assignments and quizzes", False, 10, None))
+    line(("• Single sign-on with the identity provider", False, 10, None))
+    line(("Mandatory requirements", True, 11, "14264A"))
+    line(("• LTI 1.3 support for third-party tools", False, 10, None))
+    line(("Note:", True, 10, None), (" a bold lead-in inside a paragraph is not a heading.", False, 10, None))
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
+
+
+def test_a_template_without_heading_styles_is_read_by_its_formatting() -> None:
+    data = _hand_styled_case_study()
+    spec = template_reader.read_template(data, TemplateKind.CASE_STUDY)
+    sections = spec["sections"]
+    # The label and the larger title are the cover; the heading run on at the end of the facts line is found.
+    assert [(s["title"], s["kind"]) for s in sections] == [
+        ("Background", "generated"),
+        ("Scope of work", "generated"),
+        ("Mandatory requirements", "generated"),
+    ]
+    assert sections[1]["guidance"].splitlines() == [
+        "• Course delivery, assignments and quizzes",
+        "• Single sign-on with the identity provider",
+    ]
+    assert "bold lead-in" in sections[2]["guidance"]
+    assert spec["branding"]["colors"]["primary"] == "#14264A"
+    assert not any("No headings" in w for w in spec["warnings"])
+    assert template_reader.heading_count(data) == 3

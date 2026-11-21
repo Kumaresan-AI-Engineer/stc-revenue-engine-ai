@@ -610,6 +610,9 @@ class CaseStudyPillarOut(CaseStudyCardOut):
 class CaseStudySectionOut(BaseModel):
     key: str = Field(description="The template section's key, as sent.")
     paragraphs: list[str] = Field(description="Plain-text paragraphs, following the section's guidance.")
+    bullets: list[str] = Field(
+        default_factory=list, description="List items, when the section's guidance shows or asks for a list."
+    )
 
 
 class CaseStudySourceOut(BaseModel):

@@ -258,8 +258,10 @@ async def test_a_case_study_is_written_from_the_indexed_proposal_without_money_o
     assert data["engagement"] == "Fixed cost, 26 weeks"
     assert data["sources"] and all(s["passage_id"] in _passage_ids(call) for s in data["sources"])
     assert data["solution_pillars"][0]["tag"] == "LIVE"
-    assert data["sections"] == [{"key": "challenge", "paragraphs": ["Bluewater could not see its trucks."]}]
-    assert data["meta"]["prompt_versions"] == {"case_study_writer": "case-study-writer-v2"}
+    assert data["sections"] == [
+        {"key": "challenge", "paragraphs": ["Bluewater could not see its trucks."], "bullets": []}
+    ]
+    assert data["meta"]["prompt_versions"] == {"case_study_writer": "case-study-writer-v3"}
     again = await env.client.post(CASE_STUDY, json=body, headers=env.auth())
     assert again.json()["meta"]["cached"] is True and env.llm.count("case_study_writer") == 1
 
