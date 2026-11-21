@@ -8,17 +8,18 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from fakes import _vector
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from core.config import get_settings
-from documents.chunking import Passage
-from store.models import LibraryEntryIndex, ResultCacheRow
-from store.ports import EntryMeta
-from store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
-from store.vector_db import QdrantPassages
+from revenue_engine_ai.core.config import get_settings
+from revenue_engine_ai.documents.chunking import Passage
+from revenue_engine_ai.store.models import LibraryEntryIndex, ResultCacheRow
+from revenue_engine_ai.store.ports import EntryMeta
+from revenue_engine_ai.store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
+from revenue_engine_ai.store.vector_db import QdrantPassages
+
+from tests.fakes import _vector
 
 
 @pytest.fixture
@@ -105,8 +106,8 @@ async def test_caches_round_trip(session: AsyncSession) -> None:
 async def test_job_store_is_idempotent_per_workspace_and_records_the_outcome() -> None:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from store.jobs import FAILED, QUEUED, PgJobStore
-    from store.models import JobRow
+    from revenue_engine_ai.store.jobs import FAILED, QUEUED, PgJobStore
+    from revenue_engine_ai.store.models import JobRow
 
     engine = create_async_engine(get_settings().database_url)
     try:

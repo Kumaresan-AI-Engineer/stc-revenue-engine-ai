@@ -23,7 +23,15 @@ from typing import Any
 import httpx
 import jwt
 import pytest
-from fakes import (
+
+from revenue_engine_ai.core.config import get_settings
+from revenue_engine_ai.llm.providers import get_embedder, get_llm
+from revenue_engine_ai.main import create_app
+from revenue_engine_ai.services.jobs import JobDeps, JobRunner, get_job_runner
+from revenue_engine_ai.services.vectors import Vectorizer, vectorizer
+from revenue_engine_ai.store.postgres import library_index, result_cache
+
+from tests.fakes import (
     FakeEmbedder,
     FakeLLM,
     InMemoryEmbeddingCache,
@@ -31,13 +39,6 @@ from fakes import (
     InMemoryJobStore,
     InMemoryResultCache,
 )
-
-from core.config import get_settings
-from llm.providers import get_embedder, get_llm
-from main import create_app
-from services.jobs import JobDeps, JobRunner, get_job_runner
-from services.vectors import Vectorizer, vectorizer
-from store.postgres import library_index, result_cache
 
 
 def token(workspace_id: uuid.UUID, **overrides: object) -> str:

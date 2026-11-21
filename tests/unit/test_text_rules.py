@@ -1,4 +1,4 @@
-from rules.text import (
+from revenue_engine_ai.rules.text import (
     AMOUNT_PLACEHOLDER,
     contains_quote,
     dedupe_key,

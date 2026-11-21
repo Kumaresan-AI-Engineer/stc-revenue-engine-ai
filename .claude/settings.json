@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python -m ruff check:*)",
+      "Bash(.venv/Scripts/python -m ruff format:*)",
+      "Bash(.venv/Scripts/python -m mypy:*)",
+      "Bash(.venv/Scripts/python -m pytest:*)",
+      "Bash(.venv/Scripts/python -m alembic check)",
+      "Bash(.venv/Scripts/python -m alembic current)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)"
+    ]
+  }
+}

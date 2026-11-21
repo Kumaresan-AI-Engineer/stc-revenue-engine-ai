@@ -6,10 +6,10 @@ from typing import Any
 import pytest
 from conftest import Env
 
-from agents.assumption import GENERIC_ASSUMPTION, GENERIC_RISK
-from agents.sizing import FALLBACK_RATIONALE
-from core.errors import UpstreamError
-from llm.ports import AgentCall
+from revenue_engine_ai.agents.assumption import GENERIC_ASSUMPTION, GENERIC_RISK
+from revenue_engine_ai.agents.sizing import FALLBACK_RATIONALE
+from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.ports import AgentCall
 
 
 def _problem(body: dict[str, Any], status: int) -> None:

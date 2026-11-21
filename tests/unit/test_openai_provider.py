@@ -8,10 +8,10 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from core.config import Settings
-from core.errors import UpstreamError
-from llm.openai_provider import OpenAILLM
-from llm.ports import AgentCall, Tool
+from revenue_engine_ai.core.config import Settings
+from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.openai_provider import OpenAILLM
+from revenue_engine_ai.llm.ports import AgentCall, Tool
 
 
 class Answer(BaseModel):

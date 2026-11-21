@@ -6,15 +6,15 @@ import docx
 import pytest
 from PIL import Image
 
-from agents import answer_check, assumption, section_writer, sizing, template_analysis
-from agents.answer_check import AnswerToCheck, AnswerVerdict
-from agents.assumption import AssumptionOutput
-from agents.section_writer import SectionWriterOutput
-from agents.sizing import Requirement, SizingOutput
-from agents.template_analysis import ImageSectionsOutput, TemplateAnalysisOutput
-from documents import template_reader
-from documents.template_reader import TemplateKind
-from rules.text import mentions_money
+from revenue_engine_ai.agents import answer_check, assumption, section_writer, sizing, template_analysis
+from revenue_engine_ai.agents.answer_check import AnswerToCheck, AnswerVerdict
+from revenue_engine_ai.agents.assumption import AssumptionOutput
+from revenue_engine_ai.agents.section_writer import SectionWriterOutput
+from revenue_engine_ai.agents.sizing import Requirement, SizingOutput
+from revenue_engine_ai.agents.template_analysis import ImageSectionsOutput, TemplateAnalysisOutput
+from revenue_engine_ai.documents import template_reader
+from revenue_engine_ai.documents.template_reader import TemplateKind
+from revenue_engine_ai.rules.text import mentions_money
 
 
 @pytest.mark.parametrize(

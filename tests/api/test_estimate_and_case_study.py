@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 from conftest import Env
 
-from agents.estimate_assistant import UNCLEAR_MESSAGE
-from core.errors import UpstreamError
-from llm.ports import AgentCall
+from revenue_engine_ai.agents.estimate_assistant import UNCLEAR_MESSAGE
+from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.ports import AgentCall
 
 ESTIMATE = "/v1/proposals/estimate-request"
 CASE_STUDY = "/v1/case-studies/write"

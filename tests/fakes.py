@@ -11,11 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from core.config import EMBEDDING_DIMENSIONS
-from documents.chunking import Passage
-from llm.ports import AgentCall, Completion, Tool, Usage
-from store.jobs import QUEUED, RUNNING, Job
-from store.ports import EntryMeta, Hit, StoredPassage
+from revenue_engine_ai.core.config import EMBEDDING_DIMENSIONS
+from revenue_engine_ai.documents.chunking import Passage
+from revenue_engine_ai.llm.ports import AgentCall, Completion, Tool, Usage
+from revenue_engine_ai.store.jobs import QUEUED, RUNNING, Job
+from revenue_engine_ai.store.ports import EntryMeta, Hit, StoredPassage
 
 Handler = Callable[[AgentCall[Any]], BaseModel | dict[str, Any]]
 ToolScript = Callable[[AgentCall[Any], dict[str, Tool]], Awaitable[dict[str, Any]]]

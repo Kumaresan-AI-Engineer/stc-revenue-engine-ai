@@ -16,7 +16,7 @@ docker compose up -d                                  # Postgres 16 on 5433 (Qdr
 .venv/Scripts/python -m ruff check . && .venv/Scripts/python -m ruff format --check .
 .venv/Scripts/python -m mypy src
 .venv/Scripts/python -m pytest                        # single: pytest tests/api/test_api.py::test_name
-cd src && ../.venv/Scripts/uvicorn main:app --reload --port 8001
+.venv/Scripts/python -m uvicorn revenue_engine_ai.main:app --app-dir src --reload --port 8001
 ```
 
 `tests/integration` needs the migrated database and is **skipped silently** without it. Everything else runs on
@@ -24,6 +24,10 @@ fakes (`tests/fakes.py`: scripted `FakeLLM`, word-hash `FakeEmbedder`, in-memory
 `dependency_overrides` in `tests/conftest.py`; no test calls OpenAI.
 
 ## How it fits together
+
+All code is the `revenue_engine_ai` package under `src/` (src layout); import it as
+`from revenue_engine_ai.<layer>...`, and test helpers as `from tests.fakes import ...`. The paths below are
+relative to `src/revenue_engine_ai/`.
 
 - **Layers:** `api/router.py` (HTTP only) → `services/` (one use-case per step: analyse, library, drafting,
   clarification, final_check; `services/jobs.py` runs asynchronous jobs: a new job type is an entry in
@@ -43,3 +47,10 @@ fakes (`tests/fakes.py`: scripted `FakeLLM`, word-hash `FakeEmbedder`, in-memory
   fail the check); estimates stay in the backend.
 - **OpenAI SDK is 3.x:** `responses.parse(text_format=...)`, `store=False` with encrypted reasoning carried
   between tool turns. Check the installed SDK before changing call shapes.
+
+## Claude Code skills
+
+Project skills in `.claude/skills/` (committed): `/simplify` (tidy what changed), `/code-review` (bugs),
+`/security-review` (vulnerabilities, report-only), `/run` (start the service and check a change),
+`/new-agent` (add or change an agent the way the others are built). Usual order before a pull request:
+`/simplify`, `/code-review`, `/security-review` for sensitive changes, then `/run`.

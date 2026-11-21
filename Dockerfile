@@ -1,21 +1,25 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim AS runtime
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    RE_AI_EMBEDDING_CACHE_DIR=/app/models \
+    RE_AI_QDRANT_PATH=/app/data/qdrant
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
-# Bake the free embedding model into the image so the first request does not download it.
-ENV RE_AI_EMBEDDING_CACHE_DIR=/app/models
+RUN pip install .
+# The embedding model is baked into the image, so a container starts without downloading it.
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/app/models')"
 
 COPY alembic.ini ./
 COPY migrations ./migrations
 
-ENV RE_AI_QDRANT_PATH=/app/data/qdrant
 RUN useradd --create-home app && mkdir -p /app/data/qdrant && chown -R app /app/models /app/data
 USER app
-WORKDIR /app/src
 EXPOSE 8001
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=4)"
+CMD ["uvicorn", "revenue_engine_ai.main:app", "--host", "0.0.0.0", "--port", "8001"]

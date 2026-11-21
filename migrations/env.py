@@ -6,9 +6,9 @@ from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-import store.models  # noqa: F401 — registers the tables on Base.metadata
-from core.config import get_settings
-from core.db import Base
+import revenue_engine_ai.store.models  # noqa: F401 — registers the tables on Base.metadata
+from revenue_engine_ai.core.config import get_settings
+from revenue_engine_ai.core.db import Base
 
 target_metadata = Base.metadata
 

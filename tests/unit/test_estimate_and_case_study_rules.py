@@ -1,8 +1,8 @@
 """The code checks around the Estimate Assistant and the Case Study Writer, without a model."""
 
-from agents import case_study_writer, estimate_assistant
-from agents.case_study_writer import CaseStudyWriterOutput, SourcePassage, TemplateSection
-from agents.estimate_assistant import Action, ActionOut, EstimateAssistantOutput, Limits
+from revenue_engine_ai.agents import case_study_writer, estimate_assistant
+from revenue_engine_ai.agents.case_study_writer import CaseStudyWriterOutput, SourcePassage, TemplateSection
+from revenue_engine_ai.agents.estimate_assistant import Action, ActionOut, EstimateAssistantOutput, Limits
 
 LIMITS = Limits(
     in_scope={"tracking": True, "driver_app": False, "x_yard": False},

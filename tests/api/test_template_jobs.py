@@ -12,9 +12,9 @@ from PIL import Image
 from pydantic import BaseModel, Field, model_validator
 from test_jobs import FILE_URL, _submission
 
-from agents.template_analysis import IMAGES_WARNING, NOT_REVIEWED_WARNING, REVIEWED_WARNING
-from core.errors import UpstreamError
-from llm.ports import AgentCall
+from revenue_engine_ai.agents.template_analysis import IMAGES_WARNING, NOT_REVIEWED_WARNING, REVIEWED_WARNING
+from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.ports import AgentCall
 
 # ---- A copy of the backend's TemplateSpec constraints (stc-revenue-engine-api modules/docgen/spec.py) ------
 

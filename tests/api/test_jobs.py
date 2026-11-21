@@ -6,10 +6,11 @@ import uuid
 from typing import Any
 
 from conftest import Env
-from fakes import approve_all
 from test_api import CATALOGUE, RFP, _form
 
-from core.config import get_settings
+from revenue_engine_ai.core.config import get_settings
+
+from tests.fakes import approve_all
 
 FILE_URL = "http://storage.test/ws/rfp.txt?X-Amz-Signature=abc"
 CALLBACK = "http://backend.test/api/v1/proposal-drafts/ai-callback"

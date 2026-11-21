@@ -4,9 +4,9 @@ import pytest
 from docx import Document
 from openpyxl import Workbook
 
-from core.errors import RuleViolation
-from documents.chunking import MAX_PASSAGE_CHARS, passages, summary_passage
-from documents.parsing import Page, extract_pages, page_windows, render_pages
+from revenue_engine_ai.core.errors import RuleViolation
+from revenue_engine_ai.documents.chunking import MAX_PASSAGE_CHARS, passages, summary_passage
+from revenue_engine_ai.documents.parsing import Page, extract_pages, page_windows, render_pages
 
 
 def _docx(paragraphs: list[str]) -> bytes:

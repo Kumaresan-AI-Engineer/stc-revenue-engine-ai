@@ -3,12 +3,13 @@ import uuid
 
 import jwt
 import pytest
-from fakes import FakeLLM
 
-from agents.review import ReviewItem, review
-from core.config import Settings
-from core.errors import Unauthorized
-from core.security import decode_service_token
+from revenue_engine_ai.agents.review import ReviewItem, review
+from revenue_engine_ai.core.config import Settings
+from revenue_engine_ai.core.errors import Unauthorized
+from revenue_engine_ai.core.security import decode_service_token
+
+from tests.fakes import FakeLLM
 
 SECRET = "unit-test-secret-long-enough-for-hs256"
 

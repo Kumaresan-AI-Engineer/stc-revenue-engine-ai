@@ -6,12 +6,12 @@ import io
 
 import pytest
 
-from agents.final_check import DraftSnapshot, FinalFacts, findings, numbers_in
-from core.errors import RuleViolation
-from core.signing import sign
-from documents import parsing
-from documents.parsing import read_document
-from rules.text import near_duplicate
+from revenue_engine_ai.agents.final_check import DraftSnapshot, FinalFacts, findings, numbers_in
+from revenue_engine_ai.core.errors import RuleViolation
+from revenue_engine_ai.core.signing import sign
+from revenue_engine_ai.documents import parsing
+from revenue_engine_ai.documents.parsing import read_document
+from revenue_engine_ai.rules.text import near_duplicate
 
 
 @pytest.mark.parametrize(

@@ -5,10 +5,11 @@ import uuid
 from typing import Any
 
 from conftest import Env
-from fakes import approve_all
 
-from agents.drafting import Claim
-from llm.ports import AgentCall, Tool
+from revenue_engine_ai.agents.drafting import Claim
+from revenue_engine_ai.llm.ports import AgentCall, Tool
+
+from tests.fakes import approve_all
 
 # As the backend sends it: {key, label, commodity, kw}.
 CATALOGUE = [

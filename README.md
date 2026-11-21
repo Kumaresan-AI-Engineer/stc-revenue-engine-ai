@@ -127,10 +127,30 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/Scripts/python.exe 
 docker compose up -d                                   # Postgres 16 on port 5433 (Qdrant is embedded)
 cp .env.example .env                                   # set RE_AI_OPENAI_API_KEY and RE_AI_SERVICE_TOKEN_SECRET
 .venv/Scripts/python -m alembic upgrade head
-cd src && ../.venv/Scripts/uvicorn main:app --reload --port 8001
+.venv/Scripts/python -m uvicorn revenue_engine_ai.main:app --app-dir src --reload --port 8001
 ```
 
-Checks (the CI gates): `ruff check .`, `ruff format --check .`, `mypy src`, `alembic check`, `pytest`.
+Checks (the CI gates): `ruff check .`, `ruff format --check .`, `mypy src`, `alembic check`,
+`pytest --cov --cov-fail-under=90`, and the Docker image build. `pre-commit install` runs ruff on every commit
+(optional). Docker: `docker build -t revenue-engine-ai .` then run it with the `RE_AI_*` settings on port 8001.
+
+## Layout
+
+```text
+src/revenue_engine_ai/   the service package (src layout)
+  main.py                app factory (create_app)
+  api/                   routes and request/response schemas (HTTP only)
+  services/              one use-case per step; jobs.py runs asynchronous jobs
+  agents/                prompt + output schema + pure check, one module per agent
+  documents/  rules/     pure: parsing, chunking, OCR, template reader; text and matching rules
+  llm/                   ports (LLM, Embedder) and the providers that implement them
+  store/                 Postgres (index, caches, jobs) and Qdrant
+  core/                  settings, database, errors, logging, service tokens, signing
+migrations/              Alembic
+tests/                   unit/ (pure), api/ (routes on fakes), integration/ (real Postgres); fakes.py
+.claude/                 Claude Code settings and project skills
+.github/                 CI, Dependabot, pull request template
+```
 
 ## Backend integration
 

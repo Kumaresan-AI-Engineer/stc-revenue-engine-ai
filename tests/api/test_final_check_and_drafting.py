@@ -5,10 +5,11 @@ import json
 from typing import Any
 
 from conftest import Env
-from fakes import approve_all
 from test_api import QUERY_BODY, _draft_script, _index, _question
 
-from llm.ports import AgentCall, Tool
+from revenue_engine_ai.llm.ports import AgentCall, Tool
+
+from tests.fakes import approve_all
 
 PROPOSAL = (
     b"Final proposal for Acme Logistics.\n"

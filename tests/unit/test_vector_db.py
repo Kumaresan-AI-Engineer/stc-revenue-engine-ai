@@ -3,11 +3,12 @@
 import uuid
 
 import pytest
-from fakes import _vector
 from qdrant_client import AsyncQdrantClient
 
-from documents.chunking import Passage
-from store.vector_db import QdrantPassages
+from revenue_engine_ai.documents.chunking import Passage
+from revenue_engine_ai.store.vector_db import QdrantPassages
+
+from tests.fakes import _vector
 
 
 @pytest.fixture

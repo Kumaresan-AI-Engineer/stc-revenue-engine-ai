@@ -1,5 +1,5 @@
-from rules.matching import best_per_entry
-from store.ports import Hit, StoredPassage
+from revenue_engine_ai.rules.matching import best_per_entry
+from revenue_engine_ai.store.ports import Hit, StoredPassage
 
 
 def _hit(entry: str, pid: str, similarity: float) -> Hit:
