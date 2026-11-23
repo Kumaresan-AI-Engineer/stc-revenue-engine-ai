@@ -15,11 +15,40 @@ REQUIRED_CLAIMS = ["exp", "aud", "iss", "workspace_id", "actor_id"]
 
 
 @dataclass(frozen=True)
+class AiProvider:
+    """The AI provider a workspace chose in the backend (admin > AI provider). Settings only: the key is
+    read from the secret store by workspace, never carried in the token."""
+
+    provider: str
+    model: str
+    base_url: str | None
+    api_mode: str
+    auth_type: str
+    config_version: int
+
+
+@dataclass(frozen=True)
 class ServiceContext:
     workspace_id: uuid.UUID
     actor_id: uuid.UUID
     can_see_restricted: bool
     request_id: str | None
+    ai_provider: AiProvider | None = None
+
+
+def _ai_provider(raw: object) -> AiProvider | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("ai_provider")
+    return AiProvider(
+        provider=str(raw["provider"]),
+        model=str(raw["model"]),
+        base_url=str(raw["base_url"]) if raw.get("base_url") else None,
+        api_mode=str(raw["api_mode"]),
+        auth_type=str(raw["auth_type"]),
+        config_version=int(raw["config_version"]),
+    )
 
 
 def decode_service_token(token: str, settings: Settings) -> ServiceContext:
@@ -40,8 +69,9 @@ def decode_service_token(token: str, settings: Settings) -> ServiceContext:
             actor_id=uuid.UUID(claims["actor_id"]),
             can_see_restricted=bool(claims.get("can_see_restricted", False)),
             request_id=claims.get("request_id"),
+            ai_provider=_ai_provider(claims.get("ai_provider")),
         )
-    except (jwt.PyJWTError, ValueError) as exc:
+    except (jwt.PyJWTError, ValueError, KeyError, TypeError) as exc:
         raise Unauthorized("The service token is not valid.") from exc
 
 
