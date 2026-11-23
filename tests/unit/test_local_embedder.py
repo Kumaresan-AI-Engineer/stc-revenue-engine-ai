@@ -1,7 +1,7 @@
 import threading
 
-from core.config import Settings
-from llm.local_embedder import LocalEmbedder
+from revenue_engine_ai.core.config import Settings
+from revenue_engine_ai.llm.local_embedder import LocalEmbedder
 
 
 class StubEngine:

@@ -1,11 +1,16 @@
 """The code checks that run on every agent answer, without a model."""
 
-from agents import clarification, drafting, extraction
-from agents.clarification import ClarificationInput, ClarificationOutput, ClientQuestion, Topic
-from agents.drafting import Claim, DraftOutput
-from agents.extraction import CustomRequirement, Extraction, FeatureHit, RfpQuestion
-from documents.parsing import Page
-from store.ports import StoredPassage
+from revenue_engine_ai.agents import clarification, drafting, extraction
+from revenue_engine_ai.agents.clarification import (
+    ClarificationInput,
+    ClarificationOutput,
+    ClientQuestion,
+    Topic,
+)
+from revenue_engine_ai.agents.drafting import Claim, DraftOutput
+from revenue_engine_ai.agents.extraction import CustomRequirement, Extraction, FeatureHit, RfpQuestion
+from revenue_engine_ai.documents.parsing import Page
+from revenue_engine_ai.store.ports import StoredPassage
 
 PAGES = [
     Page(1, "Overview. The client needs real-time vehicle tracking."),

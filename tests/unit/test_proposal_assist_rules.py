@@ -1,0 +1,285 @@
+"""The code checks around the proposal assistants and the template review, without a model."""
+
+import io
+
+import docx
+import pytest
+from PIL import Image
+
+from revenue_engine_ai.agents import answer_check, assumption, section_writer, sizing, template_analysis
+from revenue_engine_ai.agents.answer_check import AnswerToCheck, AnswerVerdict
+from revenue_engine_ai.agents.assumption import AssumptionOutput
+from revenue_engine_ai.agents.section_writer import SectionWriterOutput
+from revenue_engine_ai.agents.sizing import Requirement, SizingOutput
+from revenue_engine_ai.agents.template_analysis import ImageSectionsOutput, TemplateAnalysisOutput
+from revenue_engine_ai.documents import template_reader
+from revenue_engine_ai.documents.template_reader import TemplateKind
+from revenue_engine_ai.rules.text import mentions_money
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The price is 40,000 for phase 1.",
+        "A 40k fee applies.",
+        "Rs. 500 per user.",
+        "The total cost will be 25000.",
+        "USD 120,000",
+        "€ 5 million",
+    ],
+)
+def test_money_is_found(text: str) -> None:
+    assert mentions_money(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "We deliver in 12 weeks with a team of 6.",
+        "99.9% availability.",
+        "Pricing is provided separately.",
+        "A success rate of 95%.",
+    ],
+)
+def test_text_without_money_passes(text: str) -> None:
+    assert not mentions_money(text)
+
+
+def test_section_writer_output_is_plain_text_and_never_money() -> None:
+    output = SectionWriterOutput.model_validate(
+        {
+            "sections": [
+                {"key": "a", "paragraphs": ["- **Bold** &amp; <b>tagged</b>", "Fee: EUR 300 per day.", ""]},
+                {"key": "b", "paragraphs": [f"Part {n}." for n in range(8)]},
+                {"key": "x", "paragraphs": ["Not asked for."]},
+            ]
+        }
+    )
+    written, dropped = section_writer.check(output, ["a", "b"])
+    assert written == {"a": ["Bold & tagged"], "b": [f"Part {n}." for n in range(5)]}
+    assert dropped == ["a: 'Fee: EUR 300 per day.' contains a money amount."]
+
+
+def test_a_long_paragraph_without_a_sentence_end_is_cut_at_a_word() -> None:
+    output = SectionWriterOutput.model_validate({"sections": [{"key": "a", "paragraphs": ["word " * 400]}]})
+    paragraph = section_writer.check(output, ["a"])[0]["a"][0]
+    assert len(paragraph) <= section_writer.PARAGRAPH_MAX and paragraph.endswith("word…")
+
+
+def test_assumptions_keep_the_first_known_answer_without_money() -> None:
+    output = AssumptionOutput.model_validate(
+        {
+            "assumptions": [
+                {"id": "q1", "assumption": "  We host on AWS. ", "risk": ""},
+                {"id": "q1", "assumption": "Second.", "risk": "x"},
+                {"id": "q2", "assumption": "Licences cost INR 50,000.", "risk": "x"},
+                {"id": "q9", "assumption": "Unknown.", "risk": "x"},
+                {"id": "q3", "assumption": "   ", "risk": "x"},
+            ]
+        }
+    )
+    kept = assumption.check(output, ["q1", "q2", "q3"])
+    assert list(kept) == ["q1"]
+    assert (kept["q1"].assumption, kept["q1"].risk) == ("We host on AWS.", assumption.GENERIC_RISK)
+
+
+@pytest.mark.parametrize(
+    ("question", "answer", "reason"),
+    [
+        ("Which cloud?", "   ", answer_check.NO_WORDS),
+        ("Which cloud?", "--", answer_check.NO_WORDS),
+        ("Which cloud?", "2024", answer_check.DIGITS_ONLY),
+    ],
+)
+def test_precheck_turns_away_what_is_plainly_not_an_answer(question: str, answer: str, reason: str) -> None:
+    verdict = answer_check.precheck(AnswerToCheck(question, "", "", answer))
+    assert verdict is not None and not verdict.acceptable and verdict.reason == reason
+
+
+@pytest.mark.parametrize(
+    ("question", "answer"),
+    [
+        ("How many trucks?", "400"),
+        ("How many trucks?", "about 400"),
+        ("Which cloud?", "AWS, in Frankfurt"),
+        ("Which cloud?", "AWS"),
+        ("Is there SSO?", "Yes"),
+    ],
+)
+def test_precheck_leaves_real_answers_to_the_model(question: str, answer: str) -> None:
+    assert answer_check.precheck(AnswerToCheck(question, "", "", answer)) is None
+
+
+def test_answer_check_texts_are_short_and_never_money() -> None:
+    checked = answer_check.check(AnswerVerdict(acceptable=False, reason="", suggestion="Budget USD 5,000."))
+    assert checked.reason == answer_check.NOT_AN_ANSWER
+    assert checked.suggestion == answer_check.GENERIC_SUGGESTION
+    ok = answer_check.check(AnswerVerdict(acceptable=True, reason="Fine.", suggestion="x" * 500))
+    assert ok.reason == "" and len(ok.suggestion) == answer_check.SUGGESTION_MAX
+
+
+def test_sizes_are_one_per_requirement_with_days_from_code() -> None:
+    requirements = [Requirement("a", "A", ""), Requirement("b", "B", ""), Requirement("c", "C", "")]
+    output = SizingOutput.model_validate(
+        {
+            "sizes": [
+                {"key": "a", "size": "S", "rationale": "One screen."},
+                {"key": "b", "size": "L", "rationale": "  "},
+                {"key": "z", "size": "XL", "rationale": "Unknown."},
+            ]
+        }
+    )
+    assert [(s.key, s.size, s.days) for s in sizing.sizes(output, requirements)] == [
+        ("a", "S", 10),
+        ("b", "M", 20),
+        ("c", "M", 20),
+    ]
+    assert sizing.SIZE_DAYS == {"XS": 5, "S": 10, "M": 20, "L": 40, "XL": 80}
+
+
+def _spec(*sections: dict[str, object]) -> dict[str, object]:
+    return {"sections": list(sections), "confidence": 0.5, "warnings": ["read"]}
+
+
+def test_merge_keeps_unadvised_keys_and_never_repeats_a_known_key() -> None:
+    spec = _spec(
+        {"key": "summary", "title": "Summary", "order": 1, "kind": "generated", "guidance": "g"},
+        {"key": "custom", "title": "Intro", "order": 2, "kind": "generated", "guidance": ""},
+        {"key": "custom", "title": "Plan", "order": 3, "kind": "generated", "guidance": ""},
+    )
+    output = TemplateAnalysisOutput.model_validate(
+        {
+            "sections": [
+                {"order": 2, "key": "summary", "kind": "generated", "guidance": "Open warmly."},
+                {"order": 3, "key": "Timeline", "kind": "boilerplate", "guidance": ""},  # nothing to fix
+            ]
+        }
+    )
+    merged = template_analysis.merge(spec, output, TemplateKind.PROPOSAL)
+    sections = merged["sections"]
+    assert [(s["key"], s["kind"]) for s in sections] == [
+        ("summary", "generated"),
+        ("custom", "generated"),
+        ("timeline", "generated"),
+    ]
+    assert sections[1]["guidance"] == "Open warmly." and "fixed_text" not in sections[2]
+    assert merged["confidence"] == round(0.5 + 0.3 * 2 / 3, 2)
+    assert merged["warnings"] == ["read", template_analysis.REVIEWED_WARNING]
+
+
+def test_an_unknown_key_from_the_model_is_custom() -> None:
+    spec = _spec({"key": "custom", "title": "X", "order": 1, "kind": "generated", "guidance": ""})
+    output = TemplateAnalysisOutput.model_validate(
+        {"sections": [{"order": 1, "key": "pricing_table", "kind": "generated", "guidance": "g"}]}
+    )
+    assert template_analysis.merge(spec, output, TemplateKind.PROPOSAL)["sections"][0]["key"] == "custom"
+
+
+def test_image_sections_are_capped_and_titled_by_code() -> None:
+    output = ImageSectionsOutput.model_validate(
+        {"sections": [{"title": f"Part {n}", "guidance": ""} for n in range(70)]}
+    )
+    sections = template_analysis.image_sections(output, TemplateKind.CASE_STUDY)
+    assert len(sections) == template_reader.MAX_SECTIONS and {s["key"] for s in sections} == {"custom"}
+    assert [s["order"] for s in sections] == list(range(1, 61))
+
+
+def _docx_with(pictures: list[bytes], headings: list[str]) -> bytes:
+    document = docx.Document()
+    for picture in pictures:
+        document.add_picture(io.BytesIO(picture))
+    for heading in headings:
+        document.add_heading(heading, level=1)
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
+
+
+def _image(color: tuple[int, int, int], fmt: str) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (10, 10), color).save(out, format=fmt)
+    return out.getvalue()
+
+
+def test_the_reader_counts_headings_and_finds_embedded_pictures() -> None:
+    data = _docx_with([_image((1, 2, 3), "PNG"), _image((4, 5, 6), "JPEG"), _image((7, 8, 9), "PNG")], ["A"])
+    assert template_reader.heading_count(data) == 1
+    images = template_reader.embedded_images(data, limit=2)
+    assert [mime for mime, _ in images] == ["image/png", "image/jpeg"]
+    assert template_reader.embedded_images(_docx_with([], ["A", "B"]), limit=4) == []
+    with pytest.raises(template_reader.UnreadableDocument):
+        template_reader.embedded_images(b"not a zip", limit=4)
+    with pytest.raises(template_reader.UnreadableDocument):
+        template_reader.heading_count(b"not a zip")
+
+
+def test_the_reader_takes_decimal_page_sizes_and_margins() -> None:
+    """Google Docs and LibreOffice write twips as decimals, which python-docx refuses: such a file failed as
+    'not a Word document'."""
+    document = docx.Document()
+    document.add_heading("Executive summary", level=1)
+    sect = document.sections[0]._sectPr
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    size, margins = sect.find(f"{ns}pgSz"), sect.find(f"{ns}pgMar")
+    size.set(f"{ns}w", "11905.511811023624")
+    size.set(f"{ns}h", "16837.79527559055")
+    size.set(f"{ns}orient", "landscape")
+    margins.set(f"{ns}right", "1133.857421875")
+    out = io.BytesIO()
+    document.save(out)
+    page = template_reader.read_template(out.getvalue(), TemplateKind.PROPOSAL)["page"]
+    assert (page["size"], page["width_mm"], page["height_mm"]) == ("A4", 210.0, 297.0)
+    assert page["orientation"] == "landscape" and page["margins_mm"]["right"] == 20.0
+
+
+def _hand_styled_case_study() -> bytes:
+    """A case study laid out by hand (every paragraph Normal): a label, a title, a facts line with the first
+    heading run on at its end, then bold 11pt headings over 10pt text and bullet lists."""
+    from docx.shared import Pt, RGBColor
+
+    document = docx.Document()
+
+    def line(*runs: tuple[str, bool, float, str | None]) -> None:
+        p = document.add_paragraph()
+        for text, bold, size, colour in runs:
+            r = p.add_run(text)
+            r.bold, r.font.size = bold, Pt(size)
+            if colour:
+                r.font.color.rgb = RGBColor.from_string(colour)
+
+    line(("EDUCATION", True, 9, "0F8F7A"))
+    line(("University Learning Management System", True, 17, "14264A"))
+    line(
+        ("Issued by Aldermoor University | Ref AU-LMS-2027 ", False, 9, None),
+        ("Background", True, 11, "14264A"),
+    )
+    line(("Aldermoor has 17,000 students on a learning system being retired.", False, 10, None))
+    line(("Scope of work", True, 11, "14264A"))
+    line(("• Course delivery, assignments and quizzes", False, 10, None))
+    line(("• Single sign-on with the identity provider", False, 10, None))
+    line(("Mandatory requirements", True, 11, "14264A"))
+    line(("• LTI 1.3 support for third-party tools", False, 10, None))
+    line(("Note:", True, 10, None), (" a bold lead-in inside a paragraph is not a heading.", False, 10, None))
+    out = io.BytesIO()
+    document.save(out)
+    return out.getvalue()
+
+
+def test_a_template_without_heading_styles_is_read_by_its_formatting() -> None:
+    data = _hand_styled_case_study()
+    spec = template_reader.read_template(data, TemplateKind.CASE_STUDY)
+    sections = spec["sections"]
+    # The label and the larger title are the cover; the heading run on at the end of the facts line is found.
+    assert [(s["title"], s["kind"]) for s in sections] == [
+        ("Background", "generated"),
+        ("Scope of work", "generated"),
+        ("Mandatory requirements", "generated"),
+    ]
+    assert sections[1]["guidance"].splitlines() == [
+        "• Course delivery, assignments and quizzes",
+        "• Single sign-on with the identity provider",
+    ]
+    assert "bold lead-in" in sections[2]["guidance"]
+    assert spec["branding"]["colors"]["primary"] == "#14264A"
+    assert not any("No headings" in w for w in spec["warnings"])
+    assert template_reader.heading_count(data) == 3

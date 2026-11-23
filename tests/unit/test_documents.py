@@ -4,9 +4,9 @@ import pytest
 from docx import Document
 from openpyxl import Workbook
 
-from core.errors import RuleViolation
-from documents.chunking import MAX_PASSAGE_CHARS, passages, summary_passage
-from documents.parsing import Page, extract_pages, page_windows, render_pages
+from revenue_engine_ai.core.errors import RuleViolation
+from revenue_engine_ai.documents.chunking import MAX_PASSAGE_CHARS, passages, summary_passage
+from revenue_engine_ai.documents.parsing import Page, extract_pages, page_windows, render_pages
 
 
 def _docx(paragraphs: list[str]) -> bytes:
@@ -73,6 +73,27 @@ def test_passages_are_deterministic_redacted_and_bounded() -> None:
     assert len({p.id for p in first}) == len(first)
     assert all(len(p.text) <= MAX_PASSAGE_CHARS and p.page == 3 for p in first)
     assert not any("€" in p.text for p in first)
+
+
+def test_list_items_are_passages_of_their_own() -> None:
+    page = Page(
+        2,
+        "Scope\n• Plagiarism checking and rubric-based grading\n- LTI 1.3 support for third-party tools\n"
+        "3. Migration of 6 years of course content\n17,000 students use it daily\nShort line",
+    )
+    found = passages("e", "rfp", [page])
+    assert found[0].text.startswith("Scope")  # the packed passage first, for context
+    assert [p.text for p in found[1:]] == [
+        "Plagiarism checking and rubric-based grading",
+        "LTI 1.3 support for third-party tools",
+        "Migration of 6 years of course content",
+        "17,000 students use it daily",  # a number that is not an item marker is kept
+    ]
+    assert all(p.page == 2 for p in found) and len({p.id for p in found}) == len(found)
+
+
+def test_a_single_line_is_not_indexed_twice() -> None:
+    assert len(passages("e", "rfp", [Page(1, "We delivered an offline driver mobile app.")])) == 1
 
 
 def test_very_long_sentence_is_split() -> None:

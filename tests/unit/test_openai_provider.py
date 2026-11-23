@@ -8,10 +8,10 @@ import openai
 import pytest
 from pydantic import BaseModel
 
-from core.config import Settings
-from core.errors import UpstreamError
-from llm.openai_provider import OpenAILLM
-from llm.ports import AgentCall, Tool
+from revenue_engine_ai.core.config import Settings
+from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.openai_provider import OpenAILLM
+from revenue_engine_ai.llm.ports import AgentCall, Tool
 
 
 class Answer(BaseModel):
@@ -56,7 +56,7 @@ class StubResponses:
 def _llm(replies: list[Any], **settings: Any) -> tuple[OpenAILLM, StubResponses]:
     stub = StubResponses(replies)
     client = SimpleNamespace(responses=stub)
-    return OpenAILLM(client, Settings(**settings)), stub  # type: ignore[arg-type]
+    return OpenAILLM(client, Settings(_env_file=None, **settings)), stub  # type: ignore[arg-type]
 
 
 CALL = AgentCall("drafting", "Be precise.", "Question?", Answer, "medium")
@@ -150,3 +150,20 @@ async def test_provider_errors_and_empty_answers_become_upstream_errors() -> Non
         await llm.structured(CALL)
     with pytest.raises(UpstreamError):
         await llm.structured(CALL)
+
+
+async def test_images_go_with_the_text_in_one_user_message() -> None:
+    llm, stub = _llm([_response([], Answer(text="seen"))])
+    call = AgentCall(
+        "template_vision", "Read it.", "Pages follow.", Answer, "low", ("data:image/png;base64,AA",)
+    )
+    await llm.structured(call)
+    assert stub.requests[0]["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Pages follow."},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA"},
+            ],
+        }
+    ]

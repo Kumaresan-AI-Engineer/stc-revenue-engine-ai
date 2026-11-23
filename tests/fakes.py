@@ -6,14 +6,16 @@ import math
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel
 
-from core.config import EMBEDDING_DIMENSIONS
-from documents.chunking import Passage
-from llm.ports import AgentCall, Completion, Tool, Usage
-from store.ports import EntryMeta, Hit, StoredPassage
+from revenue_engine_ai.core.config import EMBEDDING_DIMENSIONS
+from revenue_engine_ai.documents.chunking import Passage
+from revenue_engine_ai.llm.ports import AgentCall, Completion, Tool, Usage
+from revenue_engine_ai.store.jobs import QUEUED, RUNNING, Job
+from revenue_engine_ai.store.ports import EntryFilter, EntryMeta, Hit, StoredPassage
 
 Handler = Callable[[AgentCall[Any]], BaseModel | dict[str, Any]]
 ToolScript = Callable[[AgentCall[Any], dict[str, Tool]], Awaitable[dict[str, Any]]]
@@ -119,6 +121,20 @@ class InMemoryIndex:
             if ws == workspace_id and (entry_ids is None or e in entry_ids)
         }
 
+    async def find_entries(self, workspace_id: uuid.UUID, scope: EntryFilter) -> dict[str, EntryMeta]:
+        industries = {i.lower() for i in scope.industries}
+        found = {
+            e: m
+            for (ws, e), (m, _) in self.entries_.items()
+            if ws == workspace_id
+            and (not scope.kinds or m.kind in scope.kinds)
+            and (not scope.outcomes or m.outcome in scope.outcomes)
+            and (not industries or m.industry.lower() in industries)
+            and (scope.year_from is None or m.year >= scope.year_from)
+            and (scope.year_to is None or m.year <= scope.year_to)
+        }
+        return dict(sorted(found.items()))
+
     async def content_hashes(self, workspace_id: uuid.UUID, entry_ids: list[str]) -> dict[str, str]:
         return {e: h for (ws, e), (_, h) in self.entries_.items() if ws == workspace_id and e in entry_ids}
 
@@ -165,3 +181,28 @@ class InMemoryResultCache:
 
     async def put(self, workspace_id: uuid.UUID, key: str, kind: str, payload: dict[str, Any]) -> None:
         self.rows.setdefault((workspace_id, key), payload)
+
+
+class InMemoryJobStore:
+    def __init__(self) -> None:
+        self.jobs: dict[str, Job] = {}
+
+    async def create_or_get(
+        self, workspace_id: uuid.UUID, job_type: str, idempotency_key: str
+    ) -> tuple[Job, bool]:
+        for job in self.jobs.values():
+            if job.workspace_id == workspace_id and job.idempotency_key == idempotency_key:
+                return job, False
+        job = Job(str(uuid.uuid4()), workspace_id, job_type, idempotency_key, QUEUED, None)
+        self.jobs[job.id] = job
+        return job, True
+
+    async def get(self, workspace_id: uuid.UUID, job_id: str) -> Job | None:
+        job = self.jobs.get(job_id)
+        return job if job and job.workspace_id == workspace_id else None
+
+    async def start(self, job_id: str) -> None:
+        self.jobs[job_id] = replace(self.jobs[job_id], status=RUNNING)
+
+    async def finish(self, job_id: str, status: str, error: str | None = None) -> None:
+        self.jobs[job_id] = replace(self.jobs[job_id], status=status, error=error)

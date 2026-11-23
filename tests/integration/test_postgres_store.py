@@ -1,4 +1,4 @@
-"""The pgvector store against a real database (after `alembic upgrade head`).
+"""The Postgres store (passages in an in-memory Qdrant) against a real database (`alembic upgrade head`).
 
 Skipped when Postgres is unreachable, so a green run without it has not exercised this file.
 Each test works in a fresh workspace id and removes its rows; other data is never touched.
@@ -8,15 +8,18 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
-from fakes import _vector
+from qdrant_client import AsyncQdrantClient
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from core.config import get_settings
-from documents.chunking import Passage
-from store.models import LibraryEntryIndex, LibraryPassage, ResultCacheRow
-from store.ports import EntryMeta
-from store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
+from revenue_engine_ai.core.config import get_settings
+from revenue_engine_ai.documents.chunking import Passage
+from revenue_engine_ai.store.models import LibraryEntryIndex, ResultCacheRow
+from revenue_engine_ai.store.ports import EntryFilter, EntryMeta
+from revenue_engine_ai.store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
+from revenue_engine_ai.store.vector_db import QdrantPassages
+
+from tests.fakes import _vector
 
 
 @pytest.fixture
@@ -24,7 +27,7 @@ async def session() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine(get_settings().database_url)
     try:
         async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1 FROM library_passage LIMIT 1"))
+            await conn.execute(text("SELECT 1 FROM library_entry_index LIMIT 1"))
     except Exception:
         await engine.dispose()
         pytest.skip("Postgres with the AI service schema is not reachable")
@@ -39,14 +42,14 @@ def _passage(pid: str, text_: str, section: str = "proposal") -> Passage:
 
 
 async def _cleanup(s: AsyncSession, ws: uuid.UUID) -> None:
-    for model in (LibraryPassage, LibraryEntryIndex, ResultCacheRow):
+    for model in (LibraryEntryIndex, ResultCacheRow):
         await s.execute(delete(model).where(model.workspace_id == ws))
     await s.commit()
 
 
 async def test_index_search_and_isolation(session: AsyncSession) -> None:
     ws, other = uuid.uuid4(), uuid.uuid4()
-    index = PgLibraryIndex(session)
+    index = PgLibraryIndex(session, QdrantPassages(AsyncQdrantClient(location=":memory:")))
     try:
         meta = EntryMeta("e1", "Acme", "Fleet", "Logistics", "won", 2025)
         texts = ["offline driver mobile app", "employee leave portal"]
@@ -97,4 +100,61 @@ async def test_caches_round_trip(session: AsyncSession) -> None:
         assert await results.get(uuid.uuid4(), "k") is None
     finally:
         await session.rollback()
+        await _cleanup(session, ws)
+
+
+async def test_job_store_is_idempotent_per_workspace_and_records_the_outcome() -> None:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from revenue_engine_ai.store.jobs import FAILED, QUEUED, PgJobStore
+    from revenue_engine_ai.store.models import JobRow
+
+    engine = create_async_engine(get_settings().database_url)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1 FROM job LIMIT 1"))
+    except Exception:
+        await engine.dispose()
+        pytest.skip("Postgres with the job table is not reachable")
+    store = PgJobStore(async_sessionmaker(engine, expire_on_commit=False))
+    ws, other = uuid.uuid4(), uuid.uuid4()
+    try:
+        first, created = await store.create_or_get(ws, "rfp_analysis", "draft-1")
+        again, created_again = await store.create_or_get(ws, "rfp_analysis", "draft-1")
+        theirs, _ = await store.create_or_get(other, "rfp_analysis", "draft-1")
+        assert created and not created_again and again.id == first.id and first.status == QUEUED
+        assert theirs.id != first.id and await store.get(other, first.id) is None
+        await store.start(first.id)
+        await store.finish(first.id, FAILED, "The link expired.")
+        done = await store.get(ws, first.id)
+        assert done is not None and (done.status, done.error) == (FAILED, "The link expired.")
+    finally:
+        async with AsyncSession(engine) as s, s.begin():
+            await s.execute(delete(JobRow).where(JobRow.workspace_id.in_([ws, other])))
+        await engine.dispose()
+
+
+async def test_find_entries_by_kind_outcome_industry_and_year(session: AsyncSession) -> None:
+    ws = uuid.uuid4()
+    index = PgLibraryIndex(session, QdrantPassages(AsyncQdrantClient(location=":memory:")))
+    try:
+        for meta in (
+            EntryMeta("a", "Acme", "Fleet", "Logistics", "lost", 2023),
+            EntryMeta("b", "Beta", "Portal", "Healthcare", "won", 2025),
+            EntryMeta("c", "Beta", "Story", "Logistics", "pending", 2024, "casestudy"),
+        ):
+            await index.replace_entry(ws, meta, "h", [_passage(f"p{meta.entry_id}", "x")], [_vector("x")])
+
+        async def ids(**scope: object) -> list[str]:
+            return list(await index.find_entries(ws, EntryFilter(**scope)))  # type: ignore[arg-type]
+
+        assert await ids() == ["a", "b", "c"]
+        assert await ids(kinds=("casestudy",)) == ["c"]
+        assert await ids(outcomes=("lost", "won")) == ["a", "b"]
+        assert await ids(industries=("LOGISTICS",)) == ["a", "c"]
+        assert await ids(year_from=2024) == ["b", "c"]
+        assert await ids(year_to=2023) == ["a"]
+        assert (await index.find_entries(uuid.uuid4(), EntryFilter())) == {}
+        assert (await index.entries(ws, ["c"]))["c"].kind == "casestudy"
+    finally:
         await _cleanup(session, ws)

@@ -3,12 +3,13 @@ import uuid
 
 import jwt
 import pytest
-from fakes import FakeLLM
 
-from agents.review import ReviewItem, review
-from core.config import Settings
-from core.errors import Unauthorized
-from core.security import decode_service_token
+from revenue_engine_ai.agents.review import ReviewItem, review
+from revenue_engine_ai.core.config import Settings
+from revenue_engine_ai.core.errors import Unauthorized
+from revenue_engine_ai.core.security import decode_service_token
+
+from tests.fakes import FakeLLM
 
 SECRET = "unit-test-secret-long-enough-for-hs256"
 
@@ -50,9 +51,12 @@ def _token(**overrides: object) -> str:
         "workspace_id": str(uuid.uuid4()),
         "actor_id": str(uuid.uuid4()),
         "aud": "revenue-engine-ai",
+        "iss": "revenue-engine-api",
         "exp": int(time.time()) + 60,
     }
-    return jwt.encode(claims | overrides, SECRET, algorithm="HS256")
+    # An override of None leaves the claim out.
+    payload = {k: v for k, v in (claims | overrides).items() if v is not None}
+    return jwt.encode(payload, SECRET, algorithm="HS256")
 
 
 def test_valid_token_gives_the_workspace_from_the_token() -> None:
@@ -66,6 +70,8 @@ def test_valid_token_gives_the_workspace_from_the_token() -> None:
     [
         {"exp": int(time.time()) - 10},
         {"aud": "someone-else"},
+        {"iss": "someone-else"},
+        {"iss": None},
         {"workspace_id": "not-a-uuid"},
     ],
 )
