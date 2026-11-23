@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     # "responses": OpenAI's Responses API (enforced schemas, reasoning with tools). "chat_completions": for
     # gateways that only serve Chat Completions (e.g. Yantra); answers are validated and corrected instead.
     llm_api: Literal["responses", "chat_completions"] = "responses"
+    # Where the API stores a workspace's own AI key (admin > AI provider). Same file as the API's
+    # RE_SECRET_STORE_FILE; empty: workspaces cannot bring their own key and every call uses the key above.
+    secret_store_file: str = ""
+    # Must equal the API's RE_SECRET_STORE_PREFIX; the environment part of the path is `env` above.
+    secret_store_prefix: str = ""
+    # How long a workspace's client is reused before its key is read again (a saved change is seen at once,
+    # because the token carries a new config version).
+    workspace_llm_ttl_s: float = Field(default=300.0, ge=0)
     # Output budget per Chat Completions call, reasoning tokens included.
     max_output_tokens: int = Field(default=32000, ge=1024, le=128000)
     # Pinned snapshot: the same input must keep producing the same kind of output (determinism).

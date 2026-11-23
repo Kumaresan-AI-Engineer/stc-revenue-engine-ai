@@ -27,7 +27,7 @@ from revenue_engine_ai.core.signing import SIGNATURE_HEADER, sign
 from revenue_engine_ai.documents import template_reader
 from revenue_engine_ai.documents.template_reader import TemplateKind
 from revenue_engine_ai.llm.ports import LLM
-from revenue_engine_ai.llm.providers import get_llm
+from revenue_engine_ai.llm.providers import get_llm_resolver
 from revenue_engine_ai.services import analyse as analyse_service
 from revenue_engine_ai.services import templates
 from revenue_engine_ai.store.jobs import FAILED, SUCCEEDED, Job, JobStore, pg_job_store
@@ -48,7 +48,8 @@ RETRY_DELAYS = (1.0, 4.0)
 class JobDeps:
     settings: Settings
     http: httpx.AsyncClient  # downloads and callbacks
-    llm: Callable[[], LLM]  # resolved when a job runs: a missing key fails that job, not the submission
+    # Resolved when a job runs, for the job's workspace: a missing key fails that job, not the submission.
+    llm: Callable[[ServiceContext], LLM]
     cache: ResultCache
 
 
@@ -104,7 +105,7 @@ async def _rfp_analysis(run: JobRun, data: RfpAnalysisInput) -> tuple[dict[str, 
         data.filename,
         content,
         data.catalogue,
-        run.deps.llm(),
+        run.deps.llm(run.ctx),
         run.deps.cache,
         run.deps.settings,
         progress=run.progress,
@@ -116,7 +117,7 @@ async def _template_extract(run: JobRun, data: TemplateExtractInput) -> tuple[di
     content = await run.download(data.file_url)
     try:
         spec, usage = await templates.extract(
-            content, TemplateKind(data.kind), run.deps.llm, run.deps.settings
+            content, TemplateKind(data.kind), lambda: run.deps.llm(run.ctx), run.deps.settings
         )
     except template_reader.UnreadableDocument as exc:
         raise RuleViolation("file", NOT_WORD) from exc
@@ -240,5 +241,7 @@ class JobRunner:
 def get_job_runner() -> JobRunner:
     """The process's runner (a FastAPI dependency, so tests replace it)."""
     settings = get_settings()
-    deps = JobDeps(settings, httpx.AsyncClient(timeout=30), get_llm, pg_standalone_result_cache())
+    deps = JobDeps(
+        settings, httpx.AsyncClient(timeout=30), get_llm_resolver().get, pg_standalone_result_cache()
+    )
     return JobRunner(pg_job_store(), deps)

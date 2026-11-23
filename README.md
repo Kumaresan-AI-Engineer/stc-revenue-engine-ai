@@ -171,4 +171,16 @@ by an `rfp_analysis` job. Set the same `RE_AI_SERVICE_TOKEN_SECRET` and `RE_AI_C
 - **Evaluation set:** 10–20 past RFPs with known answers to tune the match threshold and gate prompt changes.
 - Other job types of ARCHITECTURE §10 (`bulk_draft`, `ingest_file`, ...): only `rfp_analysis` and
   `template_extract` run as jobs; `priority` is accepted but not used yet; a job lost by a restart is not resumed.
+**A workspace's own AI provider.** An admin can save an OpenAI key and model in the backend (Admin › AI
+provider). Each call for that workspace then carries the settings in the service token (`ai_provider`: model,
+endpoint, API type, config version), and this service reads the key from the secret store the backend writes
+to, at a path built from the token's workspace id (`llm/workspace_llm.py`), caches the client for
+`RE_AI_WORKSPACE_LLM_TTL_S` (300 s; a saved change is seen at once because the config version changes) and
+runs the call on it. A workspace with no saved provider uses `RE_AI_OPENAI_API_KEY`, and so does every workspace
+while `RE_AI_SECRET_STORE_FILE` is empty; a workspace whose saved key cannot be read fails the call with a clear
+message instead of falling back to the service's key. Only the local
+`file` store is read so far (`RE_AI_SECRET_STORE_FILE`, the backend's `RE_SECRET_STORE_FILE`).
+
 - RS256 service tokens against the backend's JWKS; Batch API for bulk library imports.
+- Reading a workspace's key from AWS Parameter Store (only the local file store is read), and the reasoning
+  effort settings still come from this service's `.env`, whatever model the workspace chose.

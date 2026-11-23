@@ -103,7 +103,7 @@ async def env() -> AsyncIterator[Env]:
     app.dependency_overrides[vectorizer] = lambda: Vectorizer(embedder, embeddings)
     outside = Outside()
     http = httpx.AsyncClient(transport=httpx.MockTransport(outside.handle))
-    jobs = JobRunner(InMemoryJobStore(), JobDeps(get_settings(), http, lambda: llm, results), (0.0, 0.0))
+    jobs = JobRunner(InMemoryJobStore(), JobDeps(get_settings(), http, lambda _ctx: llm, results), (0.0, 0.0))
     app.dependency_overrides[get_job_runner] = lambda: jobs
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://ai") as client:
