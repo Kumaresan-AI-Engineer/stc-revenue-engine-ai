@@ -15,6 +15,18 @@ class EntryMeta:
     industry: str
     outcome: str  # won | lost | pending
     year: int
+    kind: str = "proposal"  # proposal | casestudy | other
+
+
+@dataclass(frozen=True)
+class EntryFilter:
+    """Which indexed entries a search looks at. An empty field does not narrow."""
+
+    kinds: tuple[str, ...] = ()
+    outcomes: tuple[str, ...] = ()
+    industries: tuple[str, ...] = ()  # compared without case
+    year_from: int | None = None
+    year_to: int | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +57,8 @@ class LibraryIndex(Protocol):
     async def delete_entry(self, workspace_id: uuid.UUID, entry_id: str) -> bool: ...
 
     async def entries(self, workspace_id: uuid.UUID, entry_ids: list[str] | None) -> dict[str, EntryMeta]: ...
+
+    async def find_entries(self, workspace_id: uuid.UUID, scope: EntryFilter) -> dict[str, EntryMeta]: ...
 
     async def content_hashes(self, workspace_id: uuid.UUID, entry_ids: list[str]) -> dict[str, str]: ...
 

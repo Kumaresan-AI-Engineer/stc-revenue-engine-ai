@@ -13,6 +13,7 @@ from revenue_engine_ai.api.schemas import (
     CheckAnswerResponse,
     ClientQueriesRequest,
     ClientQueriesResponse,
+    DocumentMetaIn,
     DraftAnswersRequest,
     DraftAnswersResponse,
     EntryMetaIn,
@@ -24,6 +25,8 @@ from revenue_engine_ai.api.schemas import (
     JobAccepted,
     JobOut,
     JobSubmission,
+    SearchRequest,
+    SearchResponse,
     SimilarRequest,
     SimilarResponse,
     SizeRequirementsRequest,
@@ -113,6 +116,24 @@ async def index_entry(
     return await library.index_entry(ctx, entry_id, _form_json(EntryMetaIn, meta), files, index, vectors)
 
 
+@router.put("/library/documents/{entry_id}", response_model=IndexResponse, tags=["library"])
+async def index_document(
+    entry_id: str,
+    meta: str = Form(..., description="DocumentMetaIn as JSON."),
+    file: UploadFile = File(...),
+    ctx: ServiceContext = Depends(service_context),
+    index: LibraryIndex = Depends(library_index),
+    vectors: Vectorizer = Depends(vectorizer),
+    settings: Settings = Depends(get_settings),
+) -> IndexResponse:
+    """Library indexer: (re)index one standalone document (a case study or another file) for report search.
+    Unchanged content is not embedded again. Remove it with DELETE /library/entries/{entry_id}."""
+    document = (file.filename or "document", await _read(file, settings))
+    return await library.index_document(
+        ctx, entry_id, _form_json(DocumentMetaIn, meta), document, index, vectors
+    )
+
+
 @router.delete("/library/entries/{entry_id}", status_code=204, tags=["library"])
 async def delete_entry(
     entry_id: str,
@@ -134,6 +155,19 @@ async def similar(
 ) -> SimilarResponse:
     """Semantic search for Step 3: past proposals covering each requirement, and similar projects."""
     return await library.similar(ctx, body, index, vectors, embedder.model)
+
+
+@router.post("/library/search", response_model=SearchResponse, tags=["library"])
+async def search_documents(
+    body: SearchRequest,
+    ctx: ServiceContext = Depends(service_context),
+    index: LibraryIndex = Depends(library_index),
+    vectors: Vectorizer = Depends(vectorizer),
+    embedder: Embedder = Depends(get_embedder),
+) -> SearchResponse:
+    """Semantic search over the indexed documents (past bids, case studies, other files) for the report
+    builder: filters narrow the entries, then each is ranked by its best passages."""
+    return await library.search(ctx, body, index, vectors, embedder.model)
 
 
 @router.post("/proposals/draft-answers", response_model=DraftAnswersResponse, tags=["proposals"])

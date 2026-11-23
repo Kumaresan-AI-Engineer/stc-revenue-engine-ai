@@ -13,7 +13,7 @@ from revenue_engine_ai.core.db import Base
 
 
 class LibraryEntryIndex(Base):
-    """One indexed past proposal: what was indexed and from which content."""
+    """One indexed past proposal or standalone document: what was indexed and from which content."""
 
     __tablename__ = "library_entry_index"
 
@@ -24,6 +24,8 @@ class LibraryEntryIndex(Base):
     industry: Mapped[str] = mapped_column(String(60))
     outcome: Mapped[str] = mapped_column(String(10))
     year: Mapped[int] = mapped_column(Integer)
+    # proposal (a past bid: RFP, proposal, summary) | casestudy | other (one standalone document)
+    kind: Mapped[str] = mapped_column(String(16), server_default="proposal")
     content_hash: Mapped[str] = mapped_column(String(64))
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

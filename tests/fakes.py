@@ -15,7 +15,7 @@ from revenue_engine_ai.core.config import EMBEDDING_DIMENSIONS
 from revenue_engine_ai.documents.chunking import Passage
 from revenue_engine_ai.llm.ports import AgentCall, Completion, Tool, Usage
 from revenue_engine_ai.store.jobs import QUEUED, RUNNING, Job
-from revenue_engine_ai.store.ports import EntryMeta, Hit, StoredPassage
+from revenue_engine_ai.store.ports import EntryFilter, EntryMeta, Hit, StoredPassage
 
 Handler = Callable[[AgentCall[Any]], BaseModel | dict[str, Any]]
 ToolScript = Callable[[AgentCall[Any], dict[str, Tool]], Awaitable[dict[str, Any]]]
@@ -120,6 +120,20 @@ class InMemoryIndex:
             for (ws, e), (meta, _) in self.entries_.items()
             if ws == workspace_id and (entry_ids is None or e in entry_ids)
         }
+
+    async def find_entries(self, workspace_id: uuid.UUID, scope: EntryFilter) -> dict[str, EntryMeta]:
+        industries = {i.lower() for i in scope.industries}
+        found = {
+            e: m
+            for (ws, e), (m, _) in self.entries_.items()
+            if ws == workspace_id
+            and (not scope.kinds or m.kind in scope.kinds)
+            and (not scope.outcomes or m.outcome in scope.outcomes)
+            and (not industries or m.industry.lower() in industries)
+            and (scope.year_from is None or m.year >= scope.year_from)
+            and (scope.year_to is None or m.year <= scope.year_to)
+        }
+        return dict(sorted(found.items()))
 
     async def content_hashes(self, workspace_id: uuid.UUID, entry_ids: list[str]) -> dict[str, str]:
         return {e: h for (ws, e), (_, h) in self.entries_.items() if ws == workspace_id and e in entry_ids}

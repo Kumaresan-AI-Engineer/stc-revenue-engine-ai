@@ -4,19 +4,19 @@ import uuid
 from typing import Any
 
 from fastapi import Depends
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from revenue_engine_ai.core.db import db, sessionmaker
 from revenue_engine_ai.documents.chunking import Passage
 from revenue_engine_ai.store.models import EmbeddingCacheRow, LibraryEntryIndex, ResultCacheRow
-from revenue_engine_ai.store.ports import EntryMeta, Hit, StoredPassage
+from revenue_engine_ai.store.ports import EntryFilter, EntryMeta, Hit, StoredPassage
 from revenue_engine_ai.store.vector_db import QdrantPassages, get_passages
 
 
 def _meta(row: LibraryEntryIndex) -> EntryMeta:
-    return EntryMeta(row.entry_id, row.client, row.title, row.industry, row.outcome, row.year)
+    return EntryMeta(row.entry_id, row.client, row.title, row.industry, row.outcome, row.year, row.kind)
 
 
 class PgLibraryIndex:
@@ -44,6 +44,7 @@ class PgLibraryIndex:
                 industry=meta.industry,
                 outcome=meta.outcome,
                 year=meta.year,
+                kind=meta.kind,
                 content_hash=content_hash,
             )
         )
@@ -64,6 +65,21 @@ class PgLibraryIndex:
         if entry_ids is not None:
             q = q.where(LibraryEntryIndex.entry_id.in_(entry_ids))
         return {r.entry_id: _meta(r) for r in (await self._s.execute(q)).scalars()}
+
+    async def find_entries(self, workspace_id: uuid.UUID, scope: EntryFilter) -> dict[str, EntryMeta]:
+        q = select(LibraryEntryIndex).where(LibraryEntryIndex.workspace_id == workspace_id)
+        if scope.kinds:
+            q = q.where(LibraryEntryIndex.kind.in_(scope.kinds))
+        if scope.outcomes:
+            q = q.where(LibraryEntryIndex.outcome.in_(scope.outcomes))
+        if scope.industries:
+            q = q.where(func.lower(LibraryEntryIndex.industry).in_([i.lower() for i in scope.industries]))
+        if scope.year_from is not None:
+            q = q.where(LibraryEntryIndex.year >= scope.year_from)
+        if scope.year_to is not None:
+            q = q.where(LibraryEntryIndex.year <= scope.year_to)
+        rows = (await self._s.execute(q.order_by(LibraryEntryIndex.entry_id))).scalars()
+        return {r.entry_id: _meta(r) for r in rows}
 
     async def content_hashes(self, workspace_id: uuid.UUID, entry_ids: list[str]) -> dict[str, str]:
         q = select(LibraryEntryIndex.entry_id, LibraryEntryIndex.content_hash).where(

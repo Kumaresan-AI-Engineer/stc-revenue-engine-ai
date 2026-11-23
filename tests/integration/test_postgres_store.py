@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from revenue_engine_ai.core.config import get_settings
 from revenue_engine_ai.documents.chunking import Passage
 from revenue_engine_ai.store.models import LibraryEntryIndex, ResultCacheRow
-from revenue_engine_ai.store.ports import EntryMeta
+from revenue_engine_ai.store.ports import EntryFilter, EntryMeta
 from revenue_engine_ai.store.postgres import PgEmbeddingCache, PgLibraryIndex, PgResultCache
 from revenue_engine_ai.store.vector_db import QdrantPassages
 
@@ -132,3 +132,29 @@ async def test_job_store_is_idempotent_per_workspace_and_records_the_outcome() -
         async with AsyncSession(engine) as s, s.begin():
             await s.execute(delete(JobRow).where(JobRow.workspace_id.in_([ws, other])))
         await engine.dispose()
+
+
+async def test_find_entries_by_kind_outcome_industry_and_year(session: AsyncSession) -> None:
+    ws = uuid.uuid4()
+    index = PgLibraryIndex(session, QdrantPassages(AsyncQdrantClient(location=":memory:")))
+    try:
+        for meta in (
+            EntryMeta("a", "Acme", "Fleet", "Logistics", "lost", 2023),
+            EntryMeta("b", "Beta", "Portal", "Healthcare", "won", 2025),
+            EntryMeta("c", "Beta", "Story", "Logistics", "pending", 2024, "casestudy"),
+        ):
+            await index.replace_entry(ws, meta, "h", [_passage(f"p{meta.entry_id}", "x")], [_vector("x")])
+
+        async def ids(**scope: object) -> list[str]:
+            return list(await index.find_entries(ws, EntryFilter(**scope)))  # type: ignore[arg-type]
+
+        assert await ids() == ["a", "b", "c"]
+        assert await ids(kinds=("casestudy",)) == ["c"]
+        assert await ids(outcomes=("lost", "won")) == ["a", "b"]
+        assert await ids(industries=("LOGISTICS",)) == ["a", "c"]
+        assert await ids(year_from=2024) == ["b", "c"]
+        assert await ids(year_to=2023) == ["a"]
+        assert (await index.find_entries(uuid.uuid4(), EntryFilter())) == {}
+        assert (await index.entries(ws, ["c"]))["c"].kind == "casestudy"
+    finally:
+        await _cleanup(session, ws)

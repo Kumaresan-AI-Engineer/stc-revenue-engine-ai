@@ -34,7 +34,10 @@ Background: the **Library indexer** splits each past proposal into passages, rem
 stores them per workspace. A page gives packed passages (whole sentences up to 1200 characters, the context a
 writer quotes) and each list item or short line on its own: a requirement of a few words matches the bullet that
 states it (0.85+) where a page of bullets scores like unrelated text (~0.6). `CHUNKING_VERSION` is part of the
-content hash, so an entry is indexed again when the passages change.
+content hash, so an entry is indexed again when the passages change. Besides past bids, the indexer takes
+**standalone documents** (a case study or any other file; `library_entry_index.kind` `proposal` \| `casestudy` \|
+`other`, migration `0003`): the same passages and redaction, no outcome. The report builder searches both through
+`POST /library/search`; Step 3 (`/library/similar`) never sees a standalone document.
 
 The **template reader** takes a template's sections from its Word heading styles or, in a document laid out by
 hand without any, from its formatting: the bold lines at the size most of them share (a larger one is the
@@ -65,8 +68,10 @@ anything still failing is dropped or marked `needs_person`**. Nothing is guessed
 |---|---|
 | `POST /rfp/analyse` | multipart: `file` (PDF, DOCX, XLSX, TXT) + `request` = `{"catalogue": [...]}` |
 | `PUT /library/entries/{entry_id}` | multipart: `meta` JSON + optional `rfp`, `proposal` files; unchanged content is not re-embedded |
-| `DELETE /library/entries/{entry_id}` | remove from the index |
-| `POST /library/similar` | requirements (+ RFP summary) → matching past proposals with the passage that proves it |
+| `PUT /library/documents/{entry_id}` | multipart: `meta` JSON (`kind` `casestudy` \| `other`, `client`, `title`, `industry`, `year`) + `file` (PDF, DOCX, XLSX or text): one standalone document, read on its own (a section `document` plus a summary line); unchanged content is not re-embedded |
+| `DELETE /library/entries/{entry_id}` | remove from the index (a past proposal or a document) |
+| `POST /library/similar` | requirements (+ RFP summary) → matching past proposals with the passage that proves it. Only past bids (`kind` `proposal`) take part: a standalone document is never a comparable |
+| `POST /library/search` | The report builder's search. `{query (≤ 500), kinds, outcomes, industries, year_from, year_to, threshold (default 0.55), limit (≤ 100, default 25), passages_per_document (≤ 3)}` → `{results: [{entry_id, kind, client, title, industry, outcome, year, similarity, passages: [{passage_id, section, page, similarity, text}]}], candidates, threshold, embedding_model}`. The filters narrow the entries first (Postgres, `library_entry_index`), then passages are ranked by exact cosine; an entry's score is its best passage's, order is stable (ties by id). No model call, so no cost. A hit on an entry's one-line summary (title, client, year) has to clear the threshold by 0.10, since that short line scores 0.5–0.56 against any query. The 0.55 threshold is a starting point: on a handful of real queries the passage that answers a plain-words description scored 0.56–0.65 and unrelated text 0.35–0.52 (bge-small); tune it on the evaluation set |
 | `POST /proposals/draft-answers` | questions + selected entry ids → `drafted` / `needs_person` / `skipped_pricing` / `skipped` |
 | `POST /proposals/client-queries` | requirements (covered or not) + unclear points + existing questions and assumptions + `limit` → client questions |
 | `POST /proposals/final-check` | multipart: `files` (1–2) + `request` = `{"draft": {price, weeks, core_features, responses, attachments, ...}}` → `findings` for Scope, Cost, Timeline, Responses, Attachments (in that order) |

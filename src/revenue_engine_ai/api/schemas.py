@@ -9,7 +9,7 @@ from revenue_engine_ai.agents.clarification import ClientQuestion
 from revenue_engine_ai.agents.estimate_assistant import ActionKind as EstimateActionKind
 from revenue_engine_ai.agents.extraction import CatalogueFeature
 from revenue_engine_ai.agents.sizing import SizeClass
-from revenue_engine_ai.rules.matching import DEFAULT_MATCH_THRESHOLD
+from revenue_engine_ai.rules.matching import DEFAULT_MATCH_THRESHOLD, SEARCH_DEFAULT_THRESHOLD
 
 Id = Field(min_length=1, max_length=64)
 
@@ -163,6 +163,16 @@ class EntryMetaIn(BaseModel):
     summary: str = Field("", max_length=4000)
 
 
+class DocumentMetaIn(BaseModel):
+    """A standalone document (a case study, or any other file the workspace keeps), not part of a bid."""
+
+    kind: Literal["casestudy", "other"]
+    client: str = Field("", max_length=200)
+    title: str = Field(max_length=300)
+    industry: str = Field("Other", max_length=60)
+    year: int = Field(ge=1990, le=2100)
+
+
 class IndexResponse(BaseModel):
     entry_id: str
     passages: int
@@ -204,6 +214,58 @@ class ProjectSimilarity(BaseModel):
 class SimilarResponse(BaseModel):
     requirements: list[RequirementMatches]
     projects: list[ProjectSimilarity]
+    embedding_model: str
+
+
+# ---- Document search (reports) ------------------------------------------------------------
+
+
+class SearchRequest(BaseModel):
+    """Semantic search over the workspace's indexed documents. An empty filter does not narrow."""
+
+    query: str = Field(min_length=1, max_length=500)
+    kinds: list[Literal["proposal", "casestudy", "other"]] = Field(default_factory=list, max_length=3)
+    outcomes: list[Literal["won", "lost", "pending"]] = Field(default_factory=list, max_length=3)
+    industries: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(
+        default_factory=list, max_length=20
+    )
+    year_from: int | None = Field(None, ge=1990, le=2100)
+    year_to: int | None = Field(None, ge=1990, le=2100)
+    threshold: float = Field(SEARCH_DEFAULT_THRESHOLD, ge=0, le=1)
+    limit: int = Field(25, ge=1, le=100, description="At most this many documents, best first.")
+    passages_per_document: int = Field(2, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def _years_are_ordered(self) -> "SearchRequest":
+        if self.year_from is not None and self.year_to is not None and self.year_from > self.year_to:
+            raise ValueError("year_from is after year_to")
+        return self
+
+
+class SearchPassage(BaseModel):
+    passage_id: str
+    section: str
+    page: int
+    similarity: float
+    text: str
+
+
+class SearchResult(BaseModel):
+    entry_id: str
+    kind: Literal["proposal", "casestudy", "other"]
+    client: str
+    title: str
+    industry: str
+    outcome: Literal["won", "lost", "pending"]
+    year: int
+    similarity: float = Field(description="The best passage's similarity (0 to 1).")
+    passages: list[SearchPassage]
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResult]
+    candidates: int = Field(description="Documents the filters left, all of which were searched.")
+    threshold: float
     embedding_model: str
 
 
