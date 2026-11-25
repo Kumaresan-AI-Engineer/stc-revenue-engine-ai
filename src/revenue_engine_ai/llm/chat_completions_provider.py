@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from revenue_engine_ai.core.config import Settings
 from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.failures import provider_failure
 from revenue_engine_ai.llm.openai_provider import run_tool
 from revenue_engine_ai.llm.ports import AgentCall, Completion, Tool, Usage
 
@@ -81,10 +82,7 @@ class ChatCompletionsLLM:
             async with self._limit:
                 response = await self._client.chat.completions.create(**options)
         except openai.APIError as exc:
-            log.warning(
-                "llm_call_failed", extra={"fields": {"agent": call.agent, "error": type(exc).__name__}}
-            )
-            raise UpstreamError("The AI provider did not answer. Try again in a moment.") from exc
+            raise provider_failure(exc, call.agent) from exc
         if response.choices[0].finish_reason == LENGTH:
             # A correction would be cut off at the same point, so this fails at once.
             log.warning("llm_answer_truncated", extra={"fields": {"agent": call.agent}})

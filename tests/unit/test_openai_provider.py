@@ -76,6 +76,12 @@ async def test_structured_call_sends_pinned_private_cacheable_options() -> None:
     assert "temperature" not in request
 
 
+async def test_reasoning_is_not_sent_to_a_model_that_does_not_reason() -> None:
+    llm, stub = _llm([_response([], Answer(text="hi"))], chat_model="gpt-4o")
+    await llm.structured(CALL)
+    assert "reasoning" not in stub.requests[0] and "include" not in stub.requests[0]
+
+
 async def test_temperature_is_sent_only_when_configured() -> None:
     llm, stub = _llm([_response([], Answer(text="x"))], temperature=0)
     await llm.structured(AgentCall("review", "i", "x", Answer, None))

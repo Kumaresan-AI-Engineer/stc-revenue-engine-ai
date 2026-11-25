@@ -130,7 +130,7 @@ fails with "has no readable text".
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 docker compose up -d                                   # Postgres 16 on port 5433 (Qdrant is embedded)
-cp .env.example .env                                   # set RE_AI_OPENAI_API_KEY and RE_AI_SERVICE_TOKEN_SECRET
+cp .env.example .env                                   # set RE_AI_SERVICE_TOKEN_SECRET and RE_AI_SECRET_STORE_FILE (no AI key here)
 .venv/Scripts/python -m alembic upgrade head
 .venv/Scripts/python -m uvicorn revenue_engine_ai.main:app --app-dir src --reload --port 8001
 ```
@@ -171,14 +171,16 @@ by an `rfp_analysis` job. Set the same `RE_AI_SERVICE_TOKEN_SECRET` and `RE_AI_C
 - **Evaluation set:** 10–20 past RFPs with known answers to tune the match threshold and gate prompt changes.
 - Other job types of ARCHITECTURE §10 (`bulk_draft`, `ingest_file`, ...): only `rfp_analysis` and
   `template_extract` run as jobs; `priority` is accepted but not used yet; a job lost by a restart is not resumed.
-**A workspace's own AI provider.** An admin can save an OpenAI key and model in the backend (Admin › AI
-provider). Each call for that workspace then carries the settings in the service token (`ai_provider`: model,
-endpoint, API type, config version), and this service reads the key from the secret store the backend writes
-to, at a path built from the token's workspace id (`llm/workspace_llm.py`), caches the client for
-`RE_AI_WORKSPACE_LLM_TTL_S` (300 s; a saved change is seen at once because the config version changes) and
-runs the call on it. A workspace with no saved provider uses `RE_AI_OPENAI_API_KEY`, and so does every workspace
-while `RE_AI_SECRET_STORE_FILE` is empty; a workspace whose saved key cannot be read fails the call with a clear
-message instead of falling back to the service's key. Only the local
+**A workspace's own AI provider is the only source of AI credentials.** An admin saves a provider (OpenAI, an
+OpenAI-compatible gateway, or a local server such as Ollama or vLLM), model and key in the backend (Admin › AI
+provider; the key is checked with the provider before it is stored). Each call for that workspace carries the
+settings in the service token (`ai_provider`: model, endpoint, API type, config version), and this service reads
+the key from the secret store the backend writes to, at a path built from the token's workspace id
+(`llm/workspace_llm.py`), caches the client for `RE_AI_WORKSPACE_LLM_TTL_S` (300 s; a saved change is seen at
+once because the config version changes) and runs the call on it. There is no service-level key and no fallback:
+a workspace with no saved provider gets `ai-provider-not-set` (422), a key the provider rejects gets
+`ai-credential-rejected` (422), and a key that cannot be read fails the call with a clear message. An unreachable
+server, a wrong model name and a rate limit are told apart too (`llm/failures.py`). Only the local
 `file` store is read so far (`RE_AI_SECRET_STORE_FILE`, the backend's `RE_SECRET_STORE_FILE`).
 
 - RS256 service tokens against the backend's JWKS; Batch API for bulk library imports.
