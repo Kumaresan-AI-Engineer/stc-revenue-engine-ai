@@ -26,14 +26,13 @@ class Settings(BaseSettings):
     qdrant_api_key: SecretStr = SecretStr("")
     qdrant_path: str = ".qdrant"
 
-    openai_api_key: SecretStr = SecretStr("")
-    # Empty: OpenAI itself. Set it to use an OpenAI-compatible gateway.
+    # There is no service-level AI key: a workspace's provider, model, address and key come from admin > AI
+    # provider (settings in the service token, key in the secret store). These three are only the defaults a
+    # workspace's own settings replace (workspace_llm.py); they are not read from the environment in practice.
     openai_base_url: str = ""
-    # "responses": OpenAI's Responses API (enforced schemas, reasoning with tools). "chat_completions": for
-    # gateways that only serve Chat Completions (e.g. Yantra); answers are validated and corrected instead.
     llm_api: Literal["responses", "chat_completions"] = "responses"
-    # Where the API stores a workspace's own AI key (admin > AI provider). Same file as the API's
-    # RE_SECRET_STORE_FILE; empty: workspaces cannot bring their own key and every call uses the key above.
+    # Where the API stores a workspace's AI key (admin > AI provider). Same file as the API's
+    # RE_SECRET_STORE_FILE. Required for any workspace whose provider needs a key.
     secret_store_file: str = ""
     # Must equal the API's RE_SECRET_STORE_PREFIX; the environment part of the path is `env` above.
     secret_store_prefix: str = ""

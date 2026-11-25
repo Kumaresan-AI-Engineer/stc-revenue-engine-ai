@@ -9,7 +9,6 @@ os.environ.update(
         "RE_AI_CALLBACK_SECRET": "test-callback-secret-long-enough-1234",
         "RE_AI_FILE_URL_PREFIXES": '["http://storage.test/"]',
         "RE_AI_OCR_MAX_PAGES": "0",
-        "RE_AI_OPENAI_API_KEY": "",
     }
 )
 

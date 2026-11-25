@@ -2,8 +2,8 @@
 
 The settings (model, endpoint, API type) arrive in the signed service token. The key does not: the backend
 writes it to a secret store and this service reads it from there, at a path built from the token's workspace
-id, so nobody can ask for another workspace's key. A workspace with no configuration uses the service's
-own key.
+id, so nobody can ask for another workspace's key. A workspace with no configuration gets an error that says
+so: there is no service-level key to fall back on, the AI provider page is the only source of credentials.
 """
 
 import json
@@ -16,7 +16,7 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from revenue_engine_ai.core.config import Settings
-from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.core.errors import ProviderNotConfigured, UpstreamError
 from revenue_engine_ai.core.security import AiProvider, ServiceContext
 from revenue_engine_ai.llm.chat_completions_provider import ChatCompletionsLLM
 from revenue_engine_ai.llm.openai_provider import OpenAILLM
@@ -35,6 +35,9 @@ KEY_MISSING = (
 )
 KEY_UNREADABLE = "This workspace's AI key could not be read. Please try again, or tell an admin."
 NOT_SUPPORTED = "This workspace's AI provider settings are not supported by the AI service."
+NO_SECRET_STORE = (
+    "The AI service cannot read workspace AI keys: its secret store is not set up (RE_AI_SECRET_STORE_FILE)."
+)
 
 PROVIDERS: dict[str, type[OpenAILLM] | type[ChatCompletionsLLM]] = {
     "responses": OpenAILLM,
@@ -71,13 +74,10 @@ def read_api_key(file: str, path: str) -> str | None:
 
 
 class WorkspaceLLMs:
-    """Hands out the LLM for a call: the workspace's own when it has configured one, else the service's."""
+    """Hands out the LLM for a call: the workspace's own. One that has not configured it gets an error."""
 
-    def __init__(
-        self, settings: Settings, fallback: Callable[[], LLM], clock: Callable[[], float] = time.monotonic
-    ) -> None:
+    def __init__(self, settings: Settings, clock: Callable[[], float] = time.monotonic) -> None:
         self._settings = settings
-        self._fallback = fallback
         self._clock = clock
         # One client per workspace. A saved change carries a new config version in the token, so it is a new
         # entry; the lifetime only bounds how long a replaced key can be served.
@@ -85,8 +85,9 @@ class WorkspaceLLMs:
 
     def get(self, ctx: ServiceContext) -> LLM:
         provider = ctx.ai_provider
-        if provider is None or self._cannot_read_keys(provider):
-            return self._fallback()
+        if provider is None:
+            log.warning("workspace_llm.no_provider", extra={"workspace_id": str(ctx.workspace_id)})
+            raise ProviderNotConfigured()
         key = (ctx.workspace_id, provider)
         now = self._clock()
         hit = self._cache.get(key)
@@ -97,15 +98,12 @@ class WorkspaceLLMs:
         self._cache[key] = (now, llm)
         return llm
 
-    def _cannot_read_keys(self, provider: AiProvider) -> bool:
-        """No secret store is set up here (RE_AI_SECRET_STORE_FILE), so workspace keys are not in use: every
-        workspace keeps the service's own key. A provider that needs no key does not depend on the store."""
-        return provider.auth_type == API_KEY_AUTH and not self._settings.secret_store_file
-
     def _api_key(self, workspace_id: uuid.UUID, provider: AiProvider) -> str:
         if provider.auth_type != API_KEY_AUTH:
             return NO_KEY_PLACEHOLDER
         s = self._settings
+        if not s.secret_store_file:
+            raise UpstreamError(NO_SECRET_STORE)
         path = secret_path(s.secret_store_prefix, s.env, workspace_id, provider.provider)
         key = read_api_key(s.secret_store_file, path)
         if key is None:

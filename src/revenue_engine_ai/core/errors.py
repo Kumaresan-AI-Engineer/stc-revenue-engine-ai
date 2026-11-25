@@ -48,6 +48,29 @@ class UpstreamError(DomainError):
     title = "Upstream service failed"
 
 
+# The workspace's AI provider is the only source of AI credentials, so these two are rules the admin can fix
+# (422 with a `rule`, which the backend passes on to the user as it is).
+PROVIDER_NOT_SET = "ai-provider-not-set"
+PROVIDER_CREDENTIAL_REJECTED = "ai-credential-rejected"
+
+
+class ProviderNotConfigured(RuleViolation):
+    def __init__(self) -> None:
+        super().__init__(
+            PROVIDER_NOT_SET,
+            "No AI provider is set for this workspace. Ask an admin to add one in Admin > AI provider.",
+        )
+
+
+class ProviderCredentialError(RuleViolation):
+    def __init__(self) -> None:
+        super().__init__(
+            PROVIDER_CREDENTIAL_REJECTED,
+            "The AI provider did not accept this workspace's API key (it may have expired). "
+            "Ask an admin to replace it in Admin > AI provider.",
+        )
+
+
 def _problem(status: int, title: str, detail: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"type": "about:blank", "title": title, "status": status, "detail": detail, **(extra or {})}
 

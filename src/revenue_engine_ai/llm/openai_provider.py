@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-import logging
+import re
 from typing import Any
 
 import openai
@@ -11,9 +11,8 @@ from pydantic import BaseModel
 
 from revenue_engine_ai.core.config import Settings
 from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.llm.failures import provider_failure
 from revenue_engine_ai.llm.ports import AgentCall, Completion, Tool, Usage
-
-log = logging.getLogger(__name__)
 
 
 def _usage(response: Any, tool_calls: int = 0) -> Usage:
@@ -27,6 +26,14 @@ def _input(call: AgentCall[Any]) -> str | list[dict[str, Any]]:
         return call.input
     images = [{"type": "input_image", "image_url": url} for url in call.images]
     return [{"role": "user", "content": [{"type": "input_text", "text": call.input}, *images]}]
+
+
+_REASONING_MODELS = re.compile(r"^(o\d|gpt-5)")
+
+
+def _reasons(model: str) -> bool:
+    """Whether the model takes a reasoning effort; OpenAI answers 400 to the setting on models like gpt-4o."""
+    return _REASONING_MODELS.match(model) is not None
 
 
 class OpenAILLM:
@@ -45,7 +52,7 @@ class OpenAILLM:
             # Same instructions → same cache bucket, so the long fixed prefix is billed at cache rates.
             "prompt_cache_key": f"revenue-engine-ai:{call.agent}",
         }
-        if call.effort:
+        if call.effort and _reasons(self.model):
             options["reasoning"] = {"effort": call.effort}
             options["include"] = ["reasoning.encrypted_content"]
         if self._settings.temperature is not None:
@@ -59,10 +66,7 @@ class OpenAILLM:
                     text_format=call.output, **self._options(call), **kwargs
                 )
         except openai.APIError as exc:
-            log.warning(
-                "llm_call_failed", extra={"fields": {"agent": call.agent, "error": type(exc).__name__}}
-            )
-            raise UpstreamError("The AI provider did not answer. Try again in a moment.") from exc
+            raise provider_failure(exc, call.agent) from exc
 
     @staticmethod
     def _value[T: BaseModel](response: Any, call: AgentCall[T]) -> T:

@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -7,7 +8,7 @@ import jwt
 import pytest
 
 from revenue_engine_ai.core.config import Settings
-from revenue_engine_ai.core.errors import UpstreamError
+from revenue_engine_ai.core.errors import PROVIDER_NOT_SET, ProviderNotConfigured, UpstreamError
 from revenue_engine_ai.core.security import AiProvider, ServiceContext, decode_service_token
 from revenue_engine_ai.llm.chat_completions_provider import ChatCompletionsLLM
 from revenue_engine_ai.llm.openai_provider import OpenAILLM
@@ -15,12 +16,11 @@ from revenue_engine_ai.llm.workspace_llm import (
     KEY_MISSING,
     KEY_UNREADABLE,
     NO_KEY_PLACEHOLDER,
+    NO_SECRET_STORE,
     WorkspaceLLMs,
     read_api_key,
     secret_path,
 )
-
-from tests.fakes import FakeLLM
 
 WORKSPACE = uuid.uuid4()
 OTHER = uuid.uuid4()
@@ -64,9 +64,8 @@ def _settings(file: Path | str = "", **overrides: object) -> Settings:
     )
 
 
-def _resolver(settings: Settings, clock=time.monotonic) -> tuple[WorkspaceLLMs, FakeLLM]:
-    own = FakeLLM()
-    return WorkspaceLLMs(settings, lambda: own, clock), own
+def _resolver(settings: Settings, clock=time.monotonic) -> WorkspaceLLMs:
+    return WorkspaceLLMs(settings, clock)
 
 
 def test_the_path_is_the_one_the_backend_writes() -> None:
@@ -108,15 +107,17 @@ def test_a_stored_document_of_another_version_is_refused(tmp_path: Path) -> None
         read_api_key(str(file), path)
 
 
-def test_a_workspace_without_a_configuration_uses_the_services_own_llm(tmp_path: Path) -> None:
-    resolver, own = _resolver(_settings(_store(tmp_path)))
-    assert resolver.get(_ctx(None)) is own
+def test_a_workspace_without_a_configuration_gets_a_clear_error_not_a_service_key(tmp_path: Path) -> None:
+    resolver = _resolver(_settings(_store(tmp_path)))
+    with pytest.raises(ProviderNotConfigured) as caught:
+        resolver.get(_ctx(None))
+    assert caught.value.extra["rule"] == PROVIDER_NOT_SET
 
 
 def test_a_configured_workspace_gets_its_own_client_key_and_model(tmp_path: Path) -> None:
-    resolver, own = _resolver(_settings(_store(tmp_path)))
+    resolver = _resolver(_settings(_store(tmp_path)))
     llm = resolver.get(_ctx(_provider(model="gpt-mine")))
-    assert isinstance(llm, OpenAILLM) and llm is not own
+    assert isinstance(llm, OpenAILLM)
     assert llm.model == "gpt-mine"
     assert llm._client.api_key == "sk-workspace"
     assert "api.openai.com" in str(llm._client.base_url)
@@ -124,7 +125,7 @@ def test_a_configured_workspace_gets_its_own_client_key_and_model(tmp_path: Path
 
 def test_the_chat_completions_mode_and_a_custom_endpoint(tmp_path: Path) -> None:
     file = _store(tmp_path, provider="self_hosted")
-    resolver, _ = _resolver(_settings(file, openai_base_url="https://own-gateway.example/v1"))
+    resolver = _resolver(_settings(file))
     provider = _provider(
         provider="self_hosted", api_mode="chat_completions", base_url="https://llm.example/v1"
     )
@@ -134,36 +135,39 @@ def test_the_chat_completions_mode_and_a_custom_endpoint(tmp_path: Path) -> None
 
 
 def test_a_key_free_server_needs_no_stored_key(tmp_path: Path) -> None:
-    resolver, _ = _resolver(_settings(""))
+    resolver = _resolver(_settings(""))
     provider = _provider(
         provider="self_hosted",
         api_mode="chat_completions",
         auth_type="none",
-        base_url="https://llm.example/v1",
+        base_url="http://localhost:11434/v1",
     )
-    assert resolver.get(_ctx(provider))._client.api_key == NO_KEY_PLACEHOLDER  # type: ignore[attr-defined]
+    llm = resolver.get(_ctx(provider))
+    assert llm._client.api_key == NO_KEY_PLACEHOLDER  # type: ignore[attr-defined]
+    assert str(llm._client.base_url).startswith("http://localhost:11434/v1")  # type: ignore[attr-defined]
 
 
 def test_a_missing_key_fails_the_call_instead_of_using_the_services_account(tmp_path: Path) -> None:
-    resolver, _ = _resolver(_settings(_store(tmp_path, workspace=OTHER)))
+    resolver = _resolver(_settings(_store(tmp_path, workspace=OTHER)))
     with pytest.raises(UpstreamError, match=KEY_MISSING):
         resolver.get(_ctx(_provider()))
 
 
-def test_without_a_secret_store_here_every_workspace_keeps_the_services_own_llm() -> None:
-    resolver, own = _resolver(_settings(""))
-    assert resolver.get(_ctx(_provider())) is own
+def test_without_a_secret_store_here_a_keyed_provider_fails_clearly() -> None:
+    resolver = _resolver(_settings(""))
+    with pytest.raises(UpstreamError, match=re.escape(NO_SECRET_STORE)):
+        resolver.get(_ctx(_provider()))
 
 
 def test_an_unknown_api_mode_is_refused(tmp_path: Path) -> None:
-    resolver, _ = _resolver(_settings(_store(tmp_path)))
+    resolver = _resolver(_settings(_store(tmp_path)))
     with pytest.raises(UpstreamError):
         resolver.get(_ctx(_provider(api_mode="something-else")))
 
 
 def test_the_client_is_reused_until_the_settings_change_or_it_expires(tmp_path: Path) -> None:
     now = [0.0]
-    resolver, _ = _resolver(_settings(_store(tmp_path), workspace_llm_ttl_s=60), lambda: now[0])
+    resolver = _resolver(_settings(_store(tmp_path), workspace_llm_ttl_s=60), lambda: now[0])
     first = resolver.get(_ctx(_provider()))
     assert resolver.get(_ctx(_provider())) is first
     assert resolver.get(_ctx(_provider(config_version=2))) is not first
@@ -174,7 +178,7 @@ def test_the_client_is_reused_until_the_settings_change_or_it_expires(tmp_path: 
 
 def test_a_replaced_key_is_used_once_the_version_changes(tmp_path: Path) -> None:
     file = _store(tmp_path, key="sk-old")
-    resolver, _ = _resolver(_settings(file))
+    resolver = _resolver(_settings(file))
     assert resolver.get(_ctx(_provider()))._client.api_key == "sk-old"  # type: ignore[attr-defined]
     _store(tmp_path, key="sk-new")
     new = resolver.get(_ctx(_provider(config_version=2)))
@@ -189,7 +193,7 @@ def test_one_workspace_never_gets_anothers_client(tmp_path: Path) -> None:
         "value": json.dumps({"schema_version": 1, "api_key": "sk-b"})
     }
     file.write_text(json.dumps(data), encoding="utf-8")
-    resolver, _ = _resolver(_settings(file))
+    resolver = _resolver(_settings(file))
     a = resolver.get(_ctx(_provider(), WORKSPACE))
     b = resolver.get(_ctx(_provider(), OTHER))
     assert (a._client.api_key, b._client.api_key) == ("sk-a", "sk-b")  # type: ignore[attr-defined]

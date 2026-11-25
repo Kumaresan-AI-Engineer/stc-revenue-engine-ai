@@ -14,7 +14,7 @@ from revenue_engine_ai.core.config import Settings
 from revenue_engine_ai.core.errors import UpstreamError
 from revenue_engine_ai.llm.chat_completions_provider import ChatCompletionsLLM
 from revenue_engine_ai.llm.ports import AgentCall, Tool
-from revenue_engine_ai.llm.providers import PROVIDERS
+from revenue_engine_ai.llm.workspace_llm import PROVIDERS
 
 
 class Answer(BaseModel):
