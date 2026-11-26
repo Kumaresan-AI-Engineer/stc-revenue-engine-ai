@@ -29,6 +29,17 @@ NO_REASONING = "none"
 LENGTH = "length"  # finish_reason when the answer hit the output-token limit
 
 
+def _without_effort(options: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in options.items() if k != "reasoning_effort"}
+
+
+def _refuses_effort(exc: openai.APIError, options: dict[str, Any]) -> bool:
+    """Whether the server refused the reasoning effort in `options`: a 400 whose words are about reasoning."""
+    if not isinstance(exc, openai.BadRequestError) or "reasoning_effort" not in options:
+        return False
+    return "reasoning" in str(getattr(exc, "message", "") or exc).lower()
+
+
 def _usage(response: Any, tool_calls: int = 0) -> Usage:
     u = response.usage
     return Usage(u.prompt_tokens if u else 0, u.completion_tokens if u else 0, 1, tool_calls)
@@ -67,6 +78,31 @@ class ChatCompletionsLLM:
         self._settings = settings
         self._limit = asyncio.Semaphore(settings.max_parallel_llm_calls)
         self.model = settings.chat_model
+        # Reasoning efforts this server refused: each takes its own values (Groq: gpt-oss low, medium or high;
+        # qwen none or default), so a refused one is not sent again.
+        self._refused_efforts: set[str] = set()
+
+    async def _send(self, options: dict[str, Any]) -> Any:
+        async with self._limit:
+            return await self._client.chat.completions.create(**options)
+
+    async def _request(self, call: AgentCall[Any], options: dict[str, Any]) -> Any:
+        """One request. The reasoning effort is a nudge: a server that answers 400 about it is asked again
+        without it (and not sent that value again). Any other failure is told in plain words."""
+        if options.get("reasoning_effort") in self._refused_efforts:
+            options = _without_effort(options)
+        try:
+            return await self._send(options)
+        except openai.APIError as exc:
+            if not _refuses_effort(exc, options):
+                raise provider_failure(exc, call.agent) from exc
+        effort = options["reasoning_effort"]
+        self._refused_efforts.add(effort)
+        log.info("reasoning_effort_dropped", extra={"fields": {"agent": call.agent, "effort": effort}})
+        try:
+            return await self._send(_without_effort(options))
+        except openai.APIError as exc:
+            raise provider_failure(exc, call.agent) from exc
 
     async def _create(self, call: AgentCall[Any], messages: list[dict[str, Any]], **kwargs: Any) -> Any:
         options: dict[str, Any] = {
@@ -78,11 +114,7 @@ class ChatCompletionsLLM:
         }
         if self._settings.temperature is not None:
             options["temperature"] = self._settings.temperature
-        try:
-            async with self._limit:
-                response = await self._client.chat.completions.create(**options)
-        except openai.APIError as exc:
-            raise provider_failure(exc, call.agent) from exc
+        response = await self._request(call, options)
         if response.choices[0].finish_reason == LENGTH:
             # A correction would be cut off at the same point, so this fails at once.
             log.warning("llm_answer_truncated", extra={"fields": {"agent": call.agent}})

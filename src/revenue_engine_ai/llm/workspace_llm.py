@@ -112,21 +112,39 @@ class WorkspaceLLMs:
         return key
 
     def _build(self, workspace_id: uuid.UUID, provider: AiProvider) -> LLM:
-        implementation = PROVIDERS.get(provider.api_mode)
-        if implementation is None:
-            raise UpstreamError(NOT_SUPPORTED)
-        s = self._settings
-        client = AsyncOpenAI(
+        _implementation(provider.api_mode)  # refuse an unknown mode before the key is read
+        return make_llm(
+            self._settings,
+            api_mode=provider.api_mode,
+            base_url=provider.base_url,
+            model=provider.model,
             api_key=self._api_key(workspace_id, provider),
-            base_url=provider.base_url,  # None: OpenAI itself, not the gateway this service's own key uses
-            timeout=s.request_timeout_s,
-            max_retries=2,
         )
-        own = s.model_copy(
-            update={
-                "chat_model": provider.model,
-                "llm_api": provider.api_mode,
-                "openai_base_url": provider.base_url or "",
-            }
-        )
-        return implementation(client, own)
+
+
+def _implementation(api_mode: str) -> type[OpenAILLM] | type[ChatCompletionsLLM]:
+    implementation = PROVIDERS.get(api_mode)
+    if implementation is None:
+        raise UpstreamError(NOT_SUPPORTED)
+    return implementation
+
+
+def make_llm(
+    settings: Settings,
+    *,
+    api_mode: str,
+    base_url: str | None,
+    model: str,
+    api_key: str,
+    max_retries: int = 2,
+) -> LLM:
+    """The LLM client for one provider's settings. `base_url` None is OpenAI itself, not the gateway this
+    service's own settings name."""
+    implementation = _implementation(api_mode)
+    client = AsyncOpenAI(
+        api_key=api_key, base_url=base_url, timeout=settings.request_timeout_s, max_retries=max_retries
+    )
+    own = settings.model_copy(
+        update={"chat_model": model, "llm_api": api_mode, "openai_base_url": base_url or ""}
+    )
+    return implementation(client, own)

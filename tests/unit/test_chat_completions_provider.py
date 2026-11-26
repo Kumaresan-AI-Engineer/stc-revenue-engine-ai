@@ -201,3 +201,54 @@ async def test_images_go_as_image_url_parts_of_the_user_message() -> None:
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
         ],
     }
+
+
+def _refusal(message: str) -> openai.BadRequestError:
+    request = httpx.Request("POST", "https://llm.example/v1/chat/completions")
+    return openai.BadRequestError(message, response=httpx.Response(400, request=request), body=None)
+
+
+EFFORT_REFUSED = "`reasoning_effort` must be one of low, medium or high for this model"
+
+
+async def test_a_server_that_refuses_the_effort_is_asked_again_without_it() -> None:
+    tool = Tool("t", "T", {}, lambda args: None)  # type: ignore[arg-type, return-value]
+    llm, stub = _llm([_refusal(EFFORT_REFUSED), _reply('{"text": "done"}')])
+
+    done = await llm.with_tools(CALL, [tool], max_tool_calls=3)
+
+    assert done.value.text == "done"
+    assert stub.requests[0]["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in stub.requests[1]
+    assert stub.requests[1]["tools"] == stub.requests[0]["tools"]  # nothing else changes
+
+
+async def test_a_refused_effort_is_not_sent_again_but_the_others_still_are() -> None:
+    tool = Tool("t", "T", {}, lambda args: None)  # type: ignore[arg-type, return-value]
+    llm, stub = _llm(
+        [_refusal(EFFORT_REFUSED), _reply('{"text": "a"}'), _reply('{"text": "b"}'), _reply('{"text": "c"}')]
+    )
+
+    await llm.with_tools(CALL, [tool], max_tool_calls=3)  # "none" is refused, then dropped
+    await llm.with_tools(CALL, [tool], max_tool_calls=3)  # not sent again: one request
+    await llm.structured(CALL)  # "medium" was never refused: still sent
+
+    assert [r.get("reasoning_effort") for r in stub.requests] == ["none", None, None, "medium"]
+
+
+async def test_a_refusal_that_is_not_about_the_effort_is_not_retried() -> None:
+    llm, stub = _llm([_refusal("max_completion_tokens is too large")])
+
+    with pytest.raises(UpstreamError):
+        await llm.structured(CALL)
+
+    assert len(stub.requests) == 1
+
+
+async def test_when_the_retry_without_the_effort_also_fails_that_is_the_error() -> None:
+    llm, stub = _llm([_refusal(EFFORT_REFUSED), _refusal("this model does not support tools")])
+
+    with pytest.raises(UpstreamError, match="tool calling"):
+        await llm.structured(CALL)
+
+    assert len(stub.requests) == 2

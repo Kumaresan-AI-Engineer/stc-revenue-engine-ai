@@ -25,6 +25,8 @@ from revenue_engine_ai.api.schemas import (
     JobAccepted,
     JobOut,
     JobSubmission,
+    ProviderProbeRequest,
+    ProviderProbeResponse,
     SearchRequest,
     SearchResponse,
     SimilarRequest,
@@ -40,7 +42,7 @@ from revenue_engine_ai.core.config import Settings, get_settings
 from revenue_engine_ai.core.errors import NotFound, RuleViolation
 from revenue_engine_ai.core.security import ServiceContext, service_context
 from revenue_engine_ai.llm.ports import LLM, Embedder
-from revenue_engine_ai.llm.providers import get_embedder, get_llm
+from revenue_engine_ai.llm.providers import ProbeLLMBuilder, get_embedder, get_llm, get_probe_llm_builder
 from revenue_engine_ai.services import analyse as analyse_service
 from revenue_engine_ai.services import (
     answer_check,
@@ -52,6 +54,7 @@ from revenue_engine_ai.services import (
     final_check,
     library,
     proposal_writing,
+    provider_probe,
     sizing,
 )
 from revenue_engine_ai.services.jobs import JobRunner, get_job_runner
@@ -77,6 +80,28 @@ async def _read(file: UploadFile, settings: Settings) -> bytes:
     if len(data) > settings.max_upload_mb * 1024 * 1024:
         raise RuleViolation("file_size", f"Files can be at most {settings.max_upload_mb} MB.")
     return data
+
+
+@router.post(
+    "/provider/probe",
+    response_model=ProviderProbeResponse,
+    tags=["provider"],
+    dependencies=[Depends(service_context)],
+)
+async def probe_provider(
+    body: ProviderProbeRequest,
+    build: ProbeLLMBuilder = Depends(get_probe_llm_builder),
+    settings: Settings = Depends(get_settings),
+) -> ProviderProbeResponse:
+    """Try a model before it is saved: three tiny requests (a structured answer, its speed, a tool call)
+    through the same client the agents use. The settings and key come in the body, used for this call only."""
+    llm = build(
+        api_mode=body.api_mode,
+        base_url=body.base_url,
+        model=body.model,
+        api_key=body.api_key.get_secret_value() if body.api_key else None,
+    )
+    return await provider_probe.probe(llm, settings)
 
 
 @router.post("/rfp/analyse", response_model=AnalyseResponse, tags=["rfp"])
