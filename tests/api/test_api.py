@@ -174,7 +174,7 @@ async def test_analyse_drops_features_the_reviewer_rejects(env: Env) -> None:
 
 
 async def test_analyse_refuses_unsupported_files_and_bad_catalogue(env: Env) -> None:
-    r = await _analyse(env, b"x", "deck.pptx")
+    r = await _analyse(env, b"x", "deck.ppt")
     assert r.status_code == 422 and r.json()["rule"] == "file_type"
     r = await env.client.post(
         "/v1/rfp/analyse",
@@ -339,8 +339,8 @@ async def test_draft_tools_cannot_read_unselected_or_other_workspace_passages(en
     env.llm.on_tools("drafting", probe)
     body = {"questions": [{"id": "q", "text": "Anything?"}], "selected_entry_ids": ["e1"]}
     await env.client.post("/v1/proposals/draft-answers", json=body, headers=env.auth())
-    assert seen["other"] == "No such passage in the selected proposals."
-    assert all(h["proposal"].startswith("Client e1") for h in json.loads(seen["search"]))
+    assert seen["other"] == "No such passage in the sources you may use."
+    assert all(h["source"].startswith("Client e1") for h in json.loads(seen["search"]))
 
 
 async def test_draft_refuses_unindexed_selection(env: Env) -> None:

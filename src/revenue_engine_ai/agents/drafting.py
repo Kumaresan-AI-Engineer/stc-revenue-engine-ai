@@ -1,7 +1,9 @@
-"""Response Drafting Agent: answers one RFP question from our past proposals, with tools.
+"""Response Drafting Agent: answers one RFP question from our past proposals, case studies and reference
+documents, with tools.
 
-It may search only the past proposals the user selected, in its own workspace, and read their
-passages. Every claim must name a passage it actually retrieved and quote it; `check` verifies that.
+It may search only the past proposals the user selected and, when asked, the workspace's case studies and
+reference documents, in its own workspace, and read their passages. Every claim must name a passage it
+actually retrieved and quote it; `check` verifies that.
 Pricing questions never reach this agent (see services/drafting.py).
 """
 
@@ -17,12 +19,13 @@ from revenue_engine_ai.llm.ports import LLM, AgentCall, Completion, Tool
 from revenue_engine_ai.rules.text import contains_quote, mentions_amount
 from revenue_engine_ai.store.ports import Hit, StoredPassage
 
-PROMPT_VERSION = "drafting-v1"
+PROMPT_VERSION = "drafting-v2"
 MAX_TOOL_CALLS = 5
 SEARCH_RESULTS = 5
 
-INSTRUCTIONS = """You draft one answer to an RFP question for our bid team, using only our past
-proposals.
+INSTRUCTIONS = """You draft one answer to an RFP question for our bid team, using only our own material: past
+proposals and, when present, case studies (projects we delivered) and reference documents (certificates,
+policies, capability decks). Each passage says which kind of source it comes from.
 
 How to work:
 1. Call search_library with short queries about the question. If the results are weak, try other
@@ -71,7 +74,7 @@ class QuestionContext:
 
 @dataclass
 class Library:
-    """The agent's window on the library: selected entries only, and a record of what it read."""
+    """The agent's window on the library: the allowed entries only, and a record of what it read."""
 
     workspace_id: uuid.UUID
     entry_ids: list[str]
@@ -83,7 +86,7 @@ class Library:
     def _view(self, p: StoredPassage, similarity: float | None = None) -> dict[str, object]:
         view: dict[str, object] = {
             "passage_id": p.id,
-            "proposal": self.entry_labels.get(p.entry_id, p.entry_id),
+            "source": self.entry_labels.get(p.entry_id, p.entry_id),
             "page": p.page,
             "text": p.text,
         }
@@ -100,7 +103,7 @@ class Library:
     async def passage_tool(self, args: dict[str, object]) -> str:
         passage = await self.fetch(str(args.get("passage_id", "")))
         if passage is None or passage.entry_id not in self.entry_ids:
-            return "No such passage in the selected proposals."
+            return "No such passage in the sources you may use."
         self.retrieved[passage.id] = passage
         return json.dumps(self._view(passage), ensure_ascii=False)
 
@@ -108,7 +111,8 @@ class Library:
         return [
             Tool(
                 "search_library",
-                "Search the selected past proposals. Returns the most similar passages.",
+                "Search the selected past proposals, case studies and reference documents. "
+                "Returns the most similar passages.",
                 _QUERY_SCHEMA,
                 self.search_tool,
             ),

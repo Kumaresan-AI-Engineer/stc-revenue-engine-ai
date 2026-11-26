@@ -191,6 +191,12 @@ class SimilarRequest(BaseModel):
     entry_ids: list[str] | None = Field(None, max_length=1000)  # candidates; None = whole library
     top_k: int = Field(3, ge=1, le=10)
     threshold: float = Field(DEFAULT_MATCH_THRESHOLD, ge=0, le=1)
+    include_documents: bool = Field(
+        False,
+        description="Also look for each requirement in the workspace's case studies and reference "
+        "documents (`documents` of each requirement). They are supporting evidence, never past bids: "
+        "`entry_ids` does not narrow them.",
+    )
 
 
 class PassageMatch(BaseModel):
@@ -201,9 +207,24 @@ class PassageMatch(BaseModel):
     text: str
 
 
+class DocumentMatch(BaseModel):
+    """A case study or reference document that covers a requirement, with the passage that does."""
+
+    entry_id: str = Field(description="The document's id (its Drive file), not a library entry.")
+    kind: str = Field(description="`casestudy` or `other` (a reference document).")
+    client: str
+    title: str
+    year: int
+    similarity: float
+    passage_id: str
+    page: int
+    text: str
+
+
 class RequirementMatches(BaseModel):
     key: str
     matches: list[PassageMatch]
+    documents: list[DocumentMatch] = Field(default_factory=list)
 
 
 class ProjectSimilarity(BaseModel):
@@ -280,9 +301,21 @@ class QuestionIn(BaseModel):
 
 class DraftAnswersRequest(BaseModel):
     questions: list[QuestionIn] = Field(min_length=1, max_length=40)
-    selected_entry_ids: list[str] = Field(min_length=1, max_length=10)
+    selected_entry_ids: list[str] = Field(default_factory=list, max_length=10)
     rfp_summary: str = Field("", max_length=4000)
     requirements: list[str] = Field(default_factory=list, max_length=100)
+    include_documents: bool = Field(
+        False,
+        description="Also draft from the workspace's case studies and reference documents (certificates, "
+        "policies, capability decks), next to the selected proposals. Without selected proposals this is the "
+        "only source.",
+    )
+
+    @model_validator(mode="after")
+    def _has_a_source(self) -> "DraftAnswersRequest":
+        if not self.selected_entry_ids and not self.include_documents:
+            raise ValueError("Select at least one proposal, or include the documents.")
+        return self
 
 
 class ClaimOut(BaseModel):
@@ -299,7 +332,10 @@ DraftStatus = Literal["drafted", "needs_person", "skipped_pricing", "skipped"]
 class CitationOut(BaseModel):
     """Where a drafted answer comes from, for the reviewer to verify (HL-04)."""
 
-    source_id: str = Field(description="The library entry id.")
+    source_id: str = Field(description="The library entry id; for a case study or reference, its document.")
+    kind: str = Field(
+        "proposal", description="`proposal` (a past bid), `casestudy` or `other` (a reference document)."
+    )
     title: str = Field(description="Client — title (year).")
     quote: str
     page: int

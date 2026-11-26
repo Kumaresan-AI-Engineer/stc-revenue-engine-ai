@@ -184,7 +184,7 @@ async def test_drafts_carry_citations_and_confidence_and_never_use_lost_proposal
 
     async def script(call: AgentCall[Any], tools: dict[str, Tool]) -> dict[str, Any]:
         hits = json.loads(await tools["search_library"].run({"query": "ISO 27001"}))
-        searched.append([h["proposal"] for h in hits])
+        searched.append([h["source"] for h in hits])
         return await _draft_script(call, tools)
 
     env.llm.on_tools("drafting", script)

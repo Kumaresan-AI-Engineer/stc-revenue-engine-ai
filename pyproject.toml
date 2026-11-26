@@ -20,6 +20,7 @@ dependencies = [
     "pypdf>=5.0",
     "python-docx>=1.1",
     "openpyxl>=3.1",
+    "python-pptx>=1.0",
     # OCR for scanned PDFs, local and free: pdfium renders the page, RapidOCR (ONNX on CPU) reads it.
     "pypdfium2>=4.30",
     "rapidocr-onnxruntime>=1.3",

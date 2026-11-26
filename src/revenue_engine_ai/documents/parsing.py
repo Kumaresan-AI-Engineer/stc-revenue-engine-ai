@@ -1,13 +1,16 @@
 """Turn an uploaded document into numbered pages of plain text. Deterministic; no model involved.
 
 PDF pages are real pages. Word and Excel have no fixed pages, so a Word "page" is a block of
-paragraphs and an Excel "page" is one sheet; the number is what a citation points at. A PDF page with no
+paragraphs, an Excel "page" is one sheet and a PowerPoint "page" is one slide; the number is what a citation
+points at. A PDF page with no
 text layer (a scan) is read with OCR when the caller allows it (`ocr_max_pages`).
 """
 
 import io
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from revenue_engine_ai.core.errors import RuleViolation
 from revenue_engine_ai.documents.ocr import ocr_pdf_pages
@@ -52,6 +55,35 @@ def _xlsx(data: bytes) -> list[str]:
     return pages
 
 
+def _slide_lines(shapes: Iterable[Any]) -> list[str]:
+    """The text of a slide's shapes in reading order: text frames, table rows, and what a group holds."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    lines: list[str] = []
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            lines.extend(_slide_lines(shape.shapes))
+        elif shape.has_table:
+            lines.extend(" | ".join(c.text.strip() for c in row.cells) for row in shape.table.rows)
+        elif shape.has_text_frame and shape.text_frame.text.strip():
+            lines.append(shape.text_frame.text.strip())
+    return lines
+
+
+def _pptx(data: bytes) -> list[str]:
+    """One page per slide, so a citation's page is the slide number; the speaker notes follow the slide."""
+    from pptx import Presentation
+
+    pages = []
+    for slide in Presentation(io.BytesIO(data)).slides:
+        lines = _slide_lines(slide.shapes)
+        notes = slide.notes_slide.notes_text_frame if slide.has_notes_slide else None
+        if notes is not None and notes.text.strip():
+            lines.append(f"Notes: {notes.text.strip()}")
+        pages.append("\n".join(lines))
+    return pages
+
+
 @dataclass(frozen=True)
 class ReadDocument:
     pages: list[Page]
@@ -84,10 +116,14 @@ def read_document(filename: str, data: bytes, *, ocr_max_pages: int = 0) -> Read
             texts = _docx(data)
         elif name.endswith((".xlsx", ".xlsm")):
             texts = _xlsx(data)
+        elif name.endswith(".pptx"):
+            texts = _pptx(data)
         elif name.endswith(TEXT_EXTENSIONS):
             texts = [data.decode("utf-8", errors="replace")]
         else:
-            raise RuleViolation("file_type", "Upload a PDF, Word (.docx), Excel (.xlsx) or text file.")
+            raise RuleViolation(
+                "file_type", "Upload a PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx) or text file."
+            )
     except RuleViolation:
         raise
     except Exception as exc:
