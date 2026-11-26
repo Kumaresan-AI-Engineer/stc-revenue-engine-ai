@@ -24,7 +24,7 @@ import jwt
 import pytest
 
 from revenue_engine_ai.core.config import get_settings
-from revenue_engine_ai.llm.providers import get_embedder, get_llm
+from revenue_engine_ai.llm.providers import get_embedder, get_llm, get_probe_llm_builder
 from revenue_engine_ai.main import create_app
 from revenue_engine_ai.services.jobs import JobDeps, JobRunner, get_job_runner
 from revenue_engine_ai.services.vectors import Vectorizer, vectorizer
@@ -96,6 +96,7 @@ async def env() -> AsyncIterator[Env]:
     llm, embedder = FakeLLM(), FakeEmbedder()
     index, embeddings, results = InMemoryIndex(), InMemoryEmbeddingCache(), InMemoryResultCache()
     app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_probe_llm_builder] = lambda: lambda **_settings: llm
     app.dependency_overrides[get_embedder] = lambda: embedder
     app.dependency_overrides[library_index] = lambda: index
     app.dependency_overrides[result_cache] = lambda: results

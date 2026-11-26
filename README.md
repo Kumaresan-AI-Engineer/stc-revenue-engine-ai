@@ -66,6 +66,7 @@ anything still failing is dropped or marked `needs_person`**. Nothing is guessed
 
 | Endpoint | Purpose |
 |---|---|
+| `POST /provider/probe` | Try a model before it is saved (admin > AI provider). `{api_mode: responses\|chat_completions, base_url, model, api_key}` (the key is used for this call only, never stored or logged) → `{verdict: ready\|limited\|unsuitable, checks: [{key: answer\|speed\|tools, status: pass\|warn\|fail, message}], seconds}`. Three tiny requests through the same client the agents use: a structured answer (at the extraction effort, which also proves the server is reached, the model exists and the output limit is accepted), its speed (a warning above 20 s) and a tool call. A failing model is a `200` answer with `unsuitable`; the whole test gives up after `RE_AI_PROVIDER_PROBE_TIMEOUT_S` (default 180). The backend calls it when the admin tests or saves a model |
 | `POST /rfp/analyse` | multipart: `file` (PDF, DOCX, XLSX, TXT) + `request` = `{"catalogue": [...]}` |
 | `PUT /library/entries/{entry_id}` | multipart: `meta` JSON + optional `rfp`, `proposal` files; unchanged content is not re-embedded |
 | `PUT /library/documents/{entry_id}` | multipart: `meta` JSON (`kind` `casestudy` \| `other`, `client`, `title`, `industry`, `year`) + `file` (PDF, DOCX, XLSX or text): one standalone document, read on its own (a section `document` plus a summary line); unchanged content is not re-embedded |
@@ -138,6 +139,49 @@ cp .env.example .env                                   # set RE_AI_SERVICE_TOKEN
 Checks (the CI gates): `ruff check .`, `ruff format --check .`, `mypy src`, `alembic check`,
 `pytest --cov --cov-fail-under=90`, and the Docker image build. `pre-commit install` runs ruff on every commit
 (optional). Docker: `docker build -t revenue-engine-ai .` then run it with the `RE_AI_*` settings on port 8001.
+
+## Try it with a local model (Ollama)
+
+Free, and documents stay on your machine. It is slow on a CPU, and a small model follows the output format less
+reliably than OpenAI, so use it to check the wiring and small documents, not for quality. The steps below are the
+suggested starting point; they have not been run end to end on every machine.
+
+1. **Install Ollama and pull a model that supports tools.** On a PC with about 16 GB of RAM and no GPU, start with
+   `ollama pull qwen3:8b` (about 5 GB); `qwen3:4b` is faster and weaker, `llama3.1:8b` does not "think" first.
+   Avoid models of 14B or more. Check what is installed with `ollama list`.
+2. **Raise Ollama's context.** Its default (about 4k tokens on a CPU) silently cuts a long RFP short. Set
+   `OLLAMA_CONTEXT_LENGTH=16384` (PowerShell: `setx OLLAMA_CONTEXT_LENGTH 16384`), quit Ollama from the tray and
+   start it again. `ollama run qwen3:8b "hi"`, then `ollama ps`: the CONTEXT column should say 16384.
+3. **Give this service more time.** In `.env` set `RE_AI_REQUEST_TIMEOUT_S=900` (the default 120 s fails on a CPU; a
+   call is also retried twice) and `RE_AI_MAX_PARALLEL_LLM_CALLS=1`, then restart the service (`.env` is read at start).
+4. **Set the provider in the app** (Admin › AI provider, as an admin):
+
+   | Field | Value |
+   |---|---|
+   | Provider | Self-hosted (OpenAI-compatible) |
+   | Base URL | `http://localhost:11434/v1` |
+   | Model identifier | the name from `ollama list`, e.g. `qwen3:8b` |
+   | API mode | Chat Completions |
+   | Authentication | None (Ollama needs no key) |
+
+   The form says the address must use `https`; with `RE_ENV=local` on the backend, `http://localhost` is allowed.
+   Elsewhere only `https` and public addresses are, unless the host is on the backend's `RE_AI_ENDPOINT_ALLOWED_HOSTS`.
+   The **Check key** button shows only with Authentication set to API key: to try the server first, choose that,
+   type any value (Ollama ignores it) and it lists the models; then switch back to None to save.
+5. **Try a small RFP** (a page or two) on the proposal builder's Scope step. Expect minutes, not seconds. While it
+   runs `ollama ps` shows the model working.
+
+Saving a provider replaces the workspace's current one, so test in a spare workspace, or keep the old key at hand.
+
+When it fails, the log line says why: `llm_call_failed` (the server refused or could not be reached; the message
+names an expired key, a wrong model name, an unreachable server or a rate limit), `llm_answer_truncated` (raise
+`RE_AI_MAX_OUTPUT_TOKENS` or use a smaller input) or `llm_answer_invalid` (the model did not follow the JSON schema
+twice: try another model). A timeout means `RE_AI_REQUEST_TIMEOUT_S` is still too low or the model is too big.
+
+The form's **Test model** button, and saving, first run the provider probe (above) against the model: three tiny
+requests. On a CPU a local model can take a minute or more for them; a model that does not finish within
+`RE_AI_PROVIDER_PROBE_TIMEOUT_S` (default 180 s; the backend waits `RE_AI_SERVICE_TIMEOUT_S`, 300 s, so keep this below
+it) is refused as too slow. A model that passes with warnings (slow, did not use the test tool) is saved.
 
 ## Layout
 

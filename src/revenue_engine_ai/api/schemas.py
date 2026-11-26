@@ -3,7 +3,7 @@
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from revenue_engine_ai.agents.clarification import ClientQuestion
 from revenue_engine_ai.agents.estimate_assistant import ActionKind as EstimateActionKind
@@ -701,3 +701,30 @@ class WriteCaseStudyResponse(BaseModel):
     sources: list[CaseStudySourceOut] = Field(description="The proposal's passages the story came from.")
     dropped: list[str] = Field(description="What the checks removed (a money amount, an invented metric).")
     meta: Meta
+
+
+# ---- Try a provider's model (provider probe) ---------------------------------------
+
+
+class ProviderProbeRequest(BaseModel):
+    """A model to try before it is saved: its settings and, when it needs one, its key. The key is used for
+    this request only; it is never stored or logged."""
+
+    api_mode: Literal["responses", "chat_completions"]
+    base_url: str | None = Field(None, max_length=2000, description="None: OpenAI itself.")
+    model: str = Field(min_length=1, max_length=200)
+    api_key: SecretStr | None = Field(None, description="None for a server that needs no key.")
+
+
+class ProbeCheck(BaseModel):
+    key: Literal["answer", "speed", "tools"]
+    status: Literal["pass", "warn", "fail"]
+    message: str = Field(description="In plain words: what was tried, or why it failed.")
+
+
+class ProviderProbeResponse(BaseModel):
+    verdict: Literal["ready", "limited", "unsuitable"] = Field(
+        description="`unsuitable` when any check failed, `limited` when only warnings, else `ready`."
+    )
+    checks: list[ProbeCheck]
+    seconds: float = Field(description="How long the first (answer) call took.")

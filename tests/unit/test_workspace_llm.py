@@ -18,6 +18,7 @@ from revenue_engine_ai.llm.workspace_llm import (
     NO_KEY_PLACEHOLDER,
     NO_SECRET_STORE,
     WorkspaceLLMs,
+    make_llm,
     read_api_key,
     secret_path,
 )
@@ -231,3 +232,23 @@ def test_a_malformed_provider_claim_rejects_the_token(claim: object) -> None:
 
     with pytest.raises(Unauthorized):
         decode_service_token(_token(ai_provider=claim), _settings())
+
+
+def test_a_client_is_built_from_settings_alone_for_a_model_being_tried(tmp_path: Path) -> None:
+    llm = make_llm(
+        _settings(""),
+        api_mode="chat_completions",
+        base_url="http://localhost:11434/v1",
+        model="qwen3:8b",
+        api_key="k",
+        max_retries=0,
+    )
+
+    assert isinstance(llm, ChatCompletionsLLM) and llm.model == "qwen3:8b"
+    assert llm._client.max_retries == 0
+    assert str(llm._client.base_url).startswith("http://localhost:11434/v1")
+
+
+def test_a_client_for_an_unknown_mode_is_refused() -> None:
+    with pytest.raises(UpstreamError):
+        make_llm(_settings(""), api_mode="nope", base_url=None, model="m", api_key="k")

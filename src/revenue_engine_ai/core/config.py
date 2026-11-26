@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     # Only sent when set, and only accepted by non-reasoning models (e.g. gpt-4.1).
     temperature: float | None = Field(default=None, ge=0, le=2)
     request_timeout_s: float = 120.0
+    # The provider check (POST /v1/provider/probe) gives up on a model that has not finished by then.
+    provider_probe_timeout_s: float = Field(default=180.0, ge=5, le=900)
     max_parallel_llm_calls: int = Field(default=8, ge=1, le=64)
 
     # Shared HS256 secret with the backend (core/service_tokens.py there). Production moves to RS256
