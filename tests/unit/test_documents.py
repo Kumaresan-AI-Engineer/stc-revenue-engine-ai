@@ -3,6 +3,8 @@ import io
 import pytest
 from docx import Document
 from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Inches
 
 from revenue_engine_ai.core.errors import RuleViolation
 from revenue_engine_ai.documents.chunking import MAX_PASSAGE_CHARS, passages, summary_passage
@@ -30,6 +32,25 @@ def _xlsx() -> bytes:
     return out.getvalue()
 
 
+def _pptx() -> bytes:
+    deck = Presentation()
+    first = deck.slides.add_slide(deck.slide_layouts[5])  # title only
+    first.shapes.title.text = "Fleet tracking platform"
+    first.notes_slide.notes_text_frame.text = "Delivered in 14 weeks"
+    deck.slides.add_slide(deck.slide_layouts[6])  # blank: nothing to read
+    table_slide = deck.slides.add_slide(deck.slide_layouts[6])
+    grid = table_slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(4), Inches(1)).table
+    for (row, col), value in {(0, 0): "KPI", (0, 1): "Result", (1, 0): "Uptime", (1, 1): "99.9%"}.items():
+        grid.cell(row, col).text = value
+    group = table_slide.shapes.add_group_shape()
+    group.shapes.add_textbox(
+        Inches(1), Inches(3), Inches(3), Inches(1)
+    ).text_frame.text = "ISO 27001 certified"
+    out = io.BytesIO()
+    deck.save(out)
+    return out.getvalue()
+
+
 def test_text_file_is_one_page() -> None:
     assert extract_pages("rfp.txt", b"Hello\nworld") == [Page(1, "Hello\nworld")]
 
@@ -46,13 +67,24 @@ def test_excel_sheet_is_a_page() -> None:
     assert "R1 | Real-time tracking" in page.text
 
 
+def test_powerpoint_slide_is_a_page_with_its_table_group_and_notes() -> None:
+    first, second = extract_pages("capability.pptx", _pptx())
+    assert (first.number, second.number) == (1, 3)  # the blank slide is skipped, numbers stay the slides'
+    assert "Fleet tracking platform" in first.text and "Notes: Delivered in 14 weeks" in first.text
+    assert "KPI | Result" in second.text and "Uptime | 99.9%" in second.text
+    assert "ISO 27001 certified" in second.text
+
+
 def test_unsupported_unreadable_and_empty_files_are_refused() -> None:
     with pytest.raises(RuleViolation) as kind:
-        extract_pages("rfp.pptx", b"x")
+        extract_pages("rfp.ppt", b"x")
     assert kind.value.extra["rule"] == "file_type"
     with pytest.raises(RuleViolation) as broken:
         extract_pages("rfp.docx", b"not a zip")
     assert broken.value.extra["rule"] == "file_unreadable"
+    with pytest.raises(RuleViolation) as broken_deck:
+        extract_pages("deck.pptx", b"not a zip")
+    assert broken_deck.value.extra["rule"] == "file_unreadable"
     with pytest.raises(RuleViolation) as empty:
         extract_pages("rfp.txt", b"   ")
     assert empty.value.extra["rule"] == "file_empty"

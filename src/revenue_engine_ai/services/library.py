@@ -3,6 +3,7 @@
 import hashlib
 
 from revenue_engine_ai.api.schemas import (
+    DocumentMatch,
     DocumentMetaIn,
     EntryMetaIn,
     IndexResponse,
@@ -19,7 +20,13 @@ from revenue_engine_ai.core.errors import NotFound, RuleViolation
 from revenue_engine_ai.core.security import ServiceContext
 from revenue_engine_ai.documents.chunking import CHUNKING_VERSION, Passage, passages, summary_passage
 from revenue_engine_ai.documents.parsing import extract_pages
-from revenue_engine_ai.rules.matching import SEARCH_POOL, best_per_entry, group_hits
+from revenue_engine_ai.rules.matching import (
+    DOCUMENT_KINDS,
+    DOCUMENT_SECTION,
+    SEARCH_POOL,
+    best_per_entry,
+    group_hits,
+)
 from revenue_engine_ai.rules.text import stable_hash
 from revenue_engine_ai.services.vectors import Vectorizer
 from revenue_engine_ai.store.ports import EntryFilter, EntryMeta, LibraryIndex
@@ -27,7 +34,6 @@ from revenue_engine_ai.store.ports import EntryFilter, EntryMeta, LibraryIndex
 SECTIONS = ("rfp", "proposal")
 # A document search reads every section: a past bid's two documents and its summary, or a standalone document.
 SEARCH_SECTIONS = (*SECTIONS, "document", "summary")
-DOCUMENT_SECTION = "document"
 PROPOSAL_KIND = "proposal"
 
 
@@ -94,6 +100,35 @@ async def delete_entry(ctx: ServiceContext, entry_id: str, index: LibraryIndex) 
         raise NotFound("This proposal is not in the index.")
 
 
+async def _supporting_documents(
+    ctx: ServiceContext,
+    vector: list[float],
+    documents: dict[str, EntryMeta],
+    req: SimilarRequest,
+    index: LibraryIndex,
+) -> list[DocumentMatch]:
+    """The case studies and reference documents that cover one requirement, best first."""
+    if not documents:
+        return []
+    hits = await index.search(
+        ctx.workspace_id, vector, entry_ids=sorted(documents), sections=[DOCUMENT_SECTION], limit=SEARCH_POOL
+    )
+    return [
+        DocumentMatch(
+            entry_id=m.entry_id,
+            kind=documents[m.entry_id].kind,
+            client=documents[m.entry_id].client,
+            title=documents[m.entry_id].title,
+            year=documents[m.entry_id].year,
+            similarity=m.similarity,
+            passage_id=m.passage_id,
+            page=m.page,
+            text=m.text,
+        )
+        for m in best_per_entry(hits, req.threshold)[: req.top_k]
+    ]
+
+
 async def similar(
     ctx: ServiceContext, req: SimilarRequest, index: LibraryIndex, vectors: Vectorizer, embedding_model: str
 ) -> SimilarResponse:
@@ -104,6 +139,11 @@ async def similar(
     if scope is None:
         known = await index.entries(ctx.workspace_id, None)
         scope = [e for e, m in known.items() if m.kind == PROPOSAL_KIND]
+    documents = (
+        await index.find_entries(ctx.workspace_id, EntryFilter(kinds=DOCUMENT_KINDS))
+        if req.include_documents
+        else {}
+    )
 
     requirements = []
     for r, vector in zip(req.requirements, embedded, strict=False):
@@ -114,6 +154,7 @@ async def similar(
         requirements.append(
             RequirementMatches(
                 key=r.key,
+                documents=await _supporting_documents(ctx, vector, documents, req, index),
                 matches=[
                     PassageMatch(
                         entry_id=m.entry_id,

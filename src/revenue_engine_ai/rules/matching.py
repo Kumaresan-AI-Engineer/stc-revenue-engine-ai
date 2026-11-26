@@ -12,6 +12,11 @@ from revenue_engine_ai.store.ports import Hit
 # tune on the evaluation set of past RFPs.
 DEFAULT_MATCH_THRESHOLD = 0.75
 SEARCH_POOL = 60
+# A standalone document is indexed in its own section, under one of these kinds: supporting evidence next to
+# the past bids (a case study, or a reference document such as a certificate, a policy or a capability deck).
+DOCUMENT_SECTION = "document"
+DOCUMENT_KINDS = ("casestudy", "other")
+KIND_LABELS = {"proposal": "past bid", "casestudy": "case study", "other": "reference document"}
 
 
 @dataclass(frozen=True)
