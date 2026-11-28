@@ -25,10 +25,10 @@ from revenue_engine_ai.api.schemas import (
     JobAccepted,
     JobOut,
     JobSubmission,
-    ProviderProbeRequest,
-    ProviderProbeResponse,
     OutreachEmailDraftRequest,
     OutreachEmailDraftResponse,
+    ProviderProbeRequest,
+    ProviderProbeResponse,
     SearchRequest,
     SearchResponse,
     SimilarRequest,
@@ -245,7 +245,8 @@ async def draft_outreach_email(
     cache: ResultCache = Depends(result_cache),
     settings: Settings = Depends(get_settings),
 ) -> OutreachEmailDraftResponse:
-    """Outreach Email Writer + Review Agent: a plain-text subject and body grounded in the supplied context."""
+    """Outreach Email Writer + Review Agent: a plain-text subject and body grounded in the supplied
+    context."""
     return await outreach_email.draft_email(ctx, body, llm, cache, settings)
 
 
