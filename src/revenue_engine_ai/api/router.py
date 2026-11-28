@@ -27,6 +27,8 @@ from revenue_engine_ai.api.schemas import (
     JobSubmission,
     ProviderProbeRequest,
     ProviderProbeResponse,
+    OutreachEmailDraftRequest,
+    OutreachEmailDraftResponse,
     SearchRequest,
     SearchResponse,
     SimilarRequest,
@@ -53,6 +55,7 @@ from revenue_engine_ai.services import (
     estimate_assistant,
     final_check,
     library,
+    outreach_email,
     proposal_writing,
     provider_probe,
     sizing,
@@ -232,6 +235,18 @@ async def write_sections(
     """Section Writer Agent: each section written from the facts only, following its template guidance, as
     plain paragraphs. A missing fact reads "[to be completed]"; a paragraph with money in it is dropped."""
     return await proposal_writing.write_sections(ctx, body, llm, cache, settings)
+
+
+@router.post("/outreach/draft", response_model=OutreachEmailDraftResponse, tags=["outreach"])
+async def draft_outreach_email(
+    body: OutreachEmailDraftRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> OutreachEmailDraftResponse:
+    """Outreach Email Writer + Review Agent: a plain-text subject and body grounded in the supplied context."""
+    return await outreach_email.draft_email(ctx, body, llm, cache, settings)
 
 
 @router.post("/proposals/estimate-request", response_model=EstimateRequestResponse, tags=["proposals"])

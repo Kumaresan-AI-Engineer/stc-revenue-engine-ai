@@ -739,6 +739,41 @@ class WriteCaseStudyResponse(BaseModel):
     meta: Meta
 
 
+# ---- Outreach email drafting -------------------------------------------------------
+
+
+class OutreachReference(BaseModel):
+    client: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    year: int = Field(ge=1900, le=2200)
+    outcome: str = Field("", max_length=500)
+    shared: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
+
+
+class OutreachEmailDraftRequest(BaseModel):
+    recipient_name: str = Field(min_length=1, max_length=200)
+    recipient_title: str = Field("", max_length=200)
+    company: str = Field(min_length=1, max_length=200)
+    industry: str = Field("", max_length=120)
+    notes: str = Field("", max_length=1000, description="Untrusted context supplied by the writer.")
+    known: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=20)
+    priorities: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=6)
+    signals: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=6)
+    goal: Literal["call", "share", "event"]
+    tone: Literal["Consultative", "Direct", "Warm"]
+    length: Literal["short", "medium", "long"]
+    variant: Literal["A", "B", "C"]
+    sender_name: str = Field("", max_length=200)
+    references: list[OutreachReference] = Field(default_factory=list, max_length=5)
+
+
+class OutreachEmailDraftResponse(BaseModel):
+    subject: str = Field(min_length=1, max_length=180)
+    body: str = Field(min_length=1, max_length=5000, description="Plain text with {{cN}} source markers.")
+    cited_references: list[Annotated[int, Field(ge=1, le=5)]] = Field(default_factory=list, max_length=5)
+    meta: Meta
+
+
 # ---- Try a provider's model (provider probe) ---------------------------------------
 
 
