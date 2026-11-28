@@ -35,6 +35,8 @@ from revenue_engine_ai.api.schemas import (
     SimilarResponse,
     SizeRequirementsRequest,
     SizeRequirementsResponse,
+    WorkspaceAskRequest,
+    WorkspaceAskResponse,
     WriteCaseStudyRequest,
     WriteCaseStudyResponse,
     WriteSectionsRequest,
@@ -59,6 +61,7 @@ from revenue_engine_ai.services import (
     proposal_writing,
     provider_probe,
     sizing,
+    workspace_assistant,
 )
 from revenue_engine_ai.services.jobs import JobRunner, get_job_runner
 from revenue_engine_ai.services.vectors import Vectorizer, vectorizer
@@ -263,6 +266,20 @@ async def estimate_request(
     or reset the price. Only actions the estimate allows; no figure is computed here and no price is ever
     sent."""
     return await estimate_assistant.estimate_request(ctx, body, llm, cache, settings)
+
+
+@router.post("/ask", response_model=WorkspaceAskResponse, tags=["ask"])
+async def ask_workspace(
+    body: WorkspaceAskRequest,
+    ctx: ServiceContext = Depends(service_context),
+    llm: LLM = Depends(get_llm),
+    cache: ResultCache = Depends(result_cache),
+    settings: Settings = Depends(get_settings),
+) -> WorkspaceAskResponse:
+    """Workspace Assistant Agent (Ask AI): answers a question from the facts the backend counted and the
+    passages it found, saying which ones it used and how. Every figure must be in them (`verified` false
+    otherwise); never a money amount."""
+    return await workspace_assistant.ask(ctx, body, llm, cache, settings)
 
 
 @router.post("/case-studies/write", response_model=WriteCaseStudyResponse, tags=["case studies"])

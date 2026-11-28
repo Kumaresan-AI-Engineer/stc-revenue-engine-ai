@@ -799,3 +799,59 @@ class ProviderProbeResponse(BaseModel):
     )
     checks: list[ProbeCheck]
     seconds: float = Field(description="How long the first (answer) call took.")
+
+
+# ---- Ask AI about the workspace (Workspace Assistant Agent) --------------------------------
+
+
+class AskTurn(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    answer: str = Field(max_length=4000)
+
+
+class AskFact(BaseModel):
+    """A figure or list the backend counted from the workspace. Never a money value."""
+
+    id: str = Field(pattern=r"^F\d{1,3}$", description="F1, F2...: what the answer cites.")
+    label: str = Field(min_length=1, max_length=200, description="What it is, e.g. 'Bid pipeline: outcomes'.")
+    text: str = Field(min_length=1, max_length=6000)
+
+
+class AskDocument(BaseModel):
+    """A passage of a document that matches the question."""
+
+    id: str = Field(pattern=r"^D\d{1,3}$", description="D1, D2...: what the answer cites.")
+    kind: Literal["proposal", "casestudy", "other"]
+    title: str = Field(min_length=1, max_length=300)
+    client: str = Field("", max_length=200)
+    passage: str = Field("", max_length=3000)
+
+
+class WorkspaceAskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    history: list[AskTurn] = Field(default_factory=list, max_length=6, description="Oldest first.")
+    facts: list[AskFact] = Field(default_factory=list, max_length=40)
+    documents: list[AskDocument] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def _ids_are_unique(self) -> "WorkspaceAskRequest":
+        ids = [f.id for f in self.facts] + [d.id for d in self.documents]
+        if len(ids) != len(set(ids)):
+            raise ValueError("fact and document ids must be unique")
+        return self
+
+
+class WorkspaceAskResponse(BaseModel):
+    kind: Literal["data", "general", "chat"] = Field(
+        description="data: about the workspace, from the facts and passages; general: general knowledge or "
+        "how-to; chat: small talk."
+    )
+    answered: bool = Field(description="False: the facts and documents do not hold the answer.")
+    answer: str = Field(description="Plain text to the person; never a money amount.")
+    how: str = Field(description="How the answer was reached: the data used and what was looked at.")
+    source_ids: list[str] = Field(
+        description="The facts (F…) and documents (D…) it relies on, most important first."
+    )
+    follow_ups: list[str] = Field(description="Up to 3 follow-up questions.")
+    verified: bool = Field(description="False: a figure in the answer could not be traced to the facts.")
+    meta: Meta

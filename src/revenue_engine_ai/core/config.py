@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     estimate_assistant_effort: ReasoningEffort | None = "low"
     # A case study from a past proposal: a story in the template's voice, written once per proposal.
     case_study_writer_effort: ReasoningEffort | None = "medium"
+    # Ask AI answers a question about the workspace while the person waits: kept fast.
+    workspace_assistant_effort: ReasoningEffort | None = "low"
     # Only sent when set, and only accepted by non-reasoning models (e.g. gpt-4.1).
     temperature: float | None = Field(default=None, ge=0, le=2)
     request_timeout_s: float = 120.0
