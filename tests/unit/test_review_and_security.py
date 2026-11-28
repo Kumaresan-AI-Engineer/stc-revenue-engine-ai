@@ -30,10 +30,27 @@ async def test_missing_verdict_fails_and_batches_are_split() -> None:
         },
     )
     result = await review(llm, _items(25), effort=None)
-    assert llm.count("review") == 2  # 20 + 5
+    assert llm.count("review") == 4  # 20 + 5, then each batch is re-asked for its missing ids
     assert result.failed["1"] == "no"
     assert result.failed["2"] == "The reviewer gave no verdict."
     assert "0" not in result.failed
+
+
+async def test_a_missing_verdict_is_reasked_once_before_it_fails() -> None:
+    llm = FakeLLM()
+    calls = 0
+
+    def answer(call: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"verdicts": [{"id": "0", "supported": True, "reason": "ok"}]}
+        return {"verdicts": [{"id": str(i), "supported": True, "reason": "ok"} for i in range(3)]}
+
+    llm.on("review", answer)
+    result = await review(llm, _items(3), effort=None)
+    assert llm.count("review") == 2
+    assert result.failed == {}
 
 
 async def test_nothing_to_review_makes_no_call() -> None:

@@ -14,8 +14,9 @@ from pydantic import BaseModel
 from revenue_engine_ai.core.config import ReasoningEffort
 from revenue_engine_ai.llm.ports import LLM, AgentCall, Usage
 
-PROMPT_VERSION = "review-v1"
+PROMPT_VERSION = "review-v2"
 BATCH_SIZE = 20
+MISSING = "The reviewer gave no verdict."
 
 INSTRUCTIONS = """You are a strict reviewer for a bid team. For each item you get a statement, the
 evidence it is based on, and a rule.
@@ -51,20 +52,32 @@ class ReviewResult:
     usage: Usage
 
 
+async def _verdicts(
+    llm: LLM, items: list[ReviewItem], effort: ReasoningEffort | None
+) -> tuple[dict[str, Verdict], Usage]:
+    payload = json.dumps([i.model_dump() for i in items], ensure_ascii=False)
+    done = await llm.structured(AgentCall("review", INSTRUCTIONS, payload, ReviewOutput, effort))
+    return {v.id: v for v in done.value.verdicts}, done.usage
+
+
 async def _batch(
     llm: LLM, items: list[ReviewItem], effort: ReasoningEffort | None
 ) -> tuple[dict[str, str], Usage]:
-    payload = json.dumps([i.model_dump() for i in items], ensure_ascii=False)
-    done = await llm.structured(AgentCall("review", INSTRUCTIONS, payload, ReviewOutput, effort))
-    verdicts = {v.id: v for v in done.value.verdicts}
+    verdicts, usage = await _verdicts(llm, items, effort)
+    missing = [item for item in items if item.id not in verdicts]
+    if missing:
+        # A model can answer for only some ids; ask once more for the rest before denying by default.
+        more, more_usage = await _verdicts(llm, missing, effort)
+        verdicts.update(more)
+        usage.add(more_usage)
     failed = {}
     for item in items:
         verdict = verdicts.get(item.id)
         if verdict is None:
-            failed[item.id] = "The reviewer gave no verdict."
+            failed[item.id] = MISSING
         elif not verdict.supported:
             failed[item.id] = verdict.reason
-    return failed, done.usage
+    return failed, usage
 
 
 async def review(llm: LLM, items: list[ReviewItem], effort: ReasoningEffort | None) -> ReviewResult:

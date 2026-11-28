@@ -231,3 +231,8 @@ server, a wrong model name and a rate limit are told apart too (`llm/failures.py
 - RS256 service tokens against the backend's JWKS; Batch API for bulk library imports.
 - Reading a workspace's key from AWS Parameter Store (only the local file store is read), and the reasoning
   effort settings still come from this service's `.env`, whatever model the workspace chose.
+
+## Outreach email drafting
+
+POST /v1/outreach/draft accepts recipient and company context, message preferences and selected past-work references. It returns a plain-text subject and body, citation markers, cited reference indexes and trace metadata. The recipient email address is not sent to the AI service. The writer output is code-checked and independently reviewed, with one retry before an unsafe draft is refused.
+
