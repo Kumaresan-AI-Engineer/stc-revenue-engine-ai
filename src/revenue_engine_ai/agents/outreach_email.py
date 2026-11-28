@@ -10,7 +10,7 @@ from revenue_engine_ai.core.config import ReasoningEffort
 from revenue_engine_ai.llm.ports import LLM, AgentCall, Completion
 from revenue_engine_ai.rules.text import mentions_money
 
-PROMPT_VERSION = "outreach-email-v3"
+PROMPT_VERSION = "outreach-email-v4"
 MAX_PARAGRAPHS = 5
 MAX_PARAGRAPH_CHARS = 700
 MAX_REFERENCES = 2
@@ -29,6 +29,11 @@ Rules:
 - Only make claims about past work when a supplied reference supports them. Cite that reference
   on the paragraph. A reference's outcome may be empty: then describe only the work and the shared
   capability, never a result or improvement.
+- Use a reference's client, title, year, outcome and shared tags exactly as supplied. Do not add a
+  deliverable, capability, adjective or outcome that is not written there. A shared tag is a topic,
+  not a promise: "Analytics" does not mean "dashboards" or "customized analytics".
+- Never use "customized", "tailored", "effective", "proven", "expertise" or "experience" unless the
+  evidence contains that word.
 - Never include prices, costs, fees, rates, financial amounts, or promises of quantified results.
 - Do not name the sender's company; the signature adds it.
 - Follow the requested tone, goal, length and variant. Keep the email specific, natural and easy to answer,

@@ -74,6 +74,53 @@ def _review_items(email: agent.CheckedEmail, req: OutreachEmailDraftRequest) -> 
     return items
 
 
+def _fallback(req: OutreachEmailDraftRequest) -> agent.CheckedEmail | None:
+    """A grounded draft for when the model keeps making claims the evidence cannot support."""
+    first = (req.recipient_name.split() or ["there"])[0]
+    topic = (req.priorities[0].strip() if req.priorities else "") or req.industry.strip() or "your work"
+    paragraphs = [
+        agent.EmailParagraph(
+            text=f"Hi {first}, I wanted to reach out about {topic.lower()} at {req.company}.",
+            references=[],
+        )
+    ]
+    if req.references:
+        reference = req.references[0]
+        detail = f"We worked with {reference.client} on {reference.title}."
+        if reference.outcome:
+            detail += f" {reference.outcome.rstrip('.')}."
+        if reference.shared:
+            detail += f" The shared focus was {', '.join(reference.shared)}."
+        paragraphs.append(agent.EmailParagraph(text=detail[: agent.MAX_PARAGRAPH_CHARS], references=[1]))
+    paragraphs.append(
+        agent.EmailParagraph(
+            text=(
+                "Would it help if I shared a short summary?"
+                if req.goal == "share"
+                else "Would you be open to a short conversation?"
+            ),
+            references=[],
+        )
+    )
+    checked, _ = agent.check(
+        agent.OutreachEmailOutput(subject=f"A note for {req.company}"[:180], paragraphs=paragraphs),
+        req,
+    )
+    if checked is not None:
+        return checked
+    checked, _ = agent.check(
+        agent.OutreachEmailOutput(
+            subject="A note",
+            paragraphs=[
+                agent.EmailParagraph(text=f"Hi {first}, I wanted to reach out.", references=[]),
+                agent.EmailParagraph(text="Would you be open to a short conversation?", references=[]),
+            ],
+        ),
+        req,
+    )
+    return checked
+
+
 async def _write(
     req: OutreachEmailDraftRequest,
     llm: LLM,
@@ -111,11 +158,16 @@ async def draft_email(
     if reviewed.failed:
         email, problems = await _write(req, llm, settings, usage, common.notes_from(reviewed.failed))
         if email is None:
-            raise RuleViolation("outreach_email", _detail(problems))
-        reviewed = await review_agent.review(llm, _review_items(email, req), settings.review_effort)
-        usage.add(reviewed.usage)
-        if reviewed.failed:
-            raise RuleViolation("outreach_email", _detail([], reviewed))
+            email = _fallback(req)
+            if email is None:
+                raise RuleViolation("outreach_email", _detail(problems, reviewed))
+        else:
+            reviewed = await review_agent.review(llm, _review_items(email, req), settings.review_effort)
+            usage.add(reviewed.usage)
+            if reviewed.failed:
+                email = _fallback(req)
+                if email is None:
+                    raise RuleViolation("outreach_email", _detail([], reviewed))
 
     body, cited_references = agent.render(email)
     response = OutreachEmailDraftResponse(

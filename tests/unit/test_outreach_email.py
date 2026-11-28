@@ -1,5 +1,6 @@
 """The outreach writer's budget, retry and failure detail, without a model."""
 
+import json
 import uuid
 
 import pytest
@@ -103,3 +104,92 @@ async def test_a_draft_that_stays_over_budget_reports_the_reason() -> None:
     assert caught.value.extra["rule"] == "outreach_email"
     assert "130 words" in caught.value.detail
     assert llm.count("review") == 0
+
+
+async def test_a_review_that_keeps_rejecting_returns_a_grounded_fallback() -> None:
+    llm = FakeLLM()
+    llm.on(
+        "outreach_email",
+        lambda call: {
+            "subject": "A customized idea for Baltic Cold Chain",
+            "paragraphs": [
+                {
+                    "text": "We have experience with creating effective dashboards.",
+                    "references": [1],
+                },
+                {"text": "Would a short call help?", "references": []},
+            ],
+        },
+    )
+    llm.on(
+        "review",
+        lambda call: {
+            "verdicts": [
+                {"id": item["id"], "supported": False, "reason": "Not supported."}
+                for item in json.loads(call.input)
+            ]
+        },
+    )
+
+    result = await outreach_email.draft_email(_ctx(), REQUEST, llm, InMemoryResultCache(), Settings())
+
+    assert result.subject == "A note for Baltic Cold Chain"
+    assert "Harbourline Ports" in result.body
+    assert "Port operations platform" in result.body
+    assert "{{c1}}" in result.body
+    assert result.cited_references == [1]
+    assert "customized" not in result.body.lower()
+    assert "dashboards" not in result.body.lower()
+
+
+async def test_the_fallback_uses_the_shared_tag_when_there_is_no_outcome() -> None:
+    request = REQUEST.model_copy(
+        update={
+            "recipient_name": "Alan walker",
+            "company": "Softsuave",
+            "goal": "call",
+            "tone": "Warm",
+            "length": "short",
+            "references": [
+                OutreachReference(
+                    client="Multi-Complex",
+                    title="Zvent",
+                    year=2026,
+                    outcome="",
+                    shared=["Analytics"],
+                )
+            ],
+        }
+    )
+    llm = FakeLLM()
+    llm.on(
+        "outreach_email",
+        lambda call: {
+            "subject": "A customized idea for Softsuave",
+            "paragraphs": [
+                {
+                    "text": "We have experience with creating effective dashboards.",
+                    "references": [1],
+                },
+                {"text": "Would a short call help?", "references": []},
+            ],
+        },
+    )
+    llm.on(
+        "review",
+        lambda call: {
+            "verdicts": [
+                {"id": item["id"], "supported": False, "reason": "Not supported."}
+                for item in json.loads(call.input)
+            ]
+        },
+    )
+
+    result = await outreach_email.draft_email(_ctx(), request, llm, InMemoryResultCache(), Settings())
+
+    assert result.subject == "A note for Softsuave"
+    assert "We worked with Multi-Complex on Zvent." in result.body
+    assert "The shared focus was Analytics." in result.body
+    assert result.cited_references == [1]
+    assert "customized" not in result.body.lower()
+    assert "dashboards" not in result.body.lower()
